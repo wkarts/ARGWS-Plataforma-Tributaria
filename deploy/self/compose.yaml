@@ -3,13 +3,25 @@ name: ${COMPOSE_PROJECT_NAME:?Configure COMPOSE_PROJECT_NAME}
 x-api-environment: &api-environment
   DEPLOYMENT_MODE: self
   SELF_DATA_DIR: /data
-  PROVIDER_MODE: disabled
+  PROVIDER_MODE: ${PROVIDER_MODE:-disabled}
+  CBS_TOKEN_URL: ${CBS_TOKEN_URL:-}
+  CBS_CLIENT_ID: ${CBS_CLIENT_ID:-}
+  CBS_CLIENT_SECRET_FILE: ${CBS_CLIENT_SECRET_FILE:-}
+  CBS_WEBHOOK_BASE_URL: ${CBS_WEBHOOK_BASE_URL:-}
+  CBS_ALLOWED_BASES: ${CBS_ALLOWED_BASES:-}
+  CBS_CREDENTIAL_ORGANIZATION_ID: ${CBS_CREDENTIAL_ORGANIZATION_ID:-}
+  CBS_RESTRICTED_ENABLED: ${CBS_RESTRICTED_ENABLED:-false}
+  CBS_PRODUCTION_ENABLED: ${CBS_PRODUCTION_ENABLED:-false}
+  CBS_PAYMENTS_ENABLED: ${CBS_PAYMENTS_ENABLED:-false}
+  CBS_AUTO_SYNC_ENABLED: ${CBS_AUTO_SYNC_ENABLED:-false}
+  CBS_AUTO_SYNC_ENVIRONMENT: ${CBS_AUTO_SYNC_ENVIRONMENT:-restricted}
+  CBS_AUTO_SYNC_RESOURCES: ${CBS_AUTO_SYNC_RESOURCES:-debitos,creditos}
   SECRET_KEY_FILE: /run/secrets/signing_key
   BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
   BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/bootstrap_password
 
 x-api-secrets: &api-secrets [signing_key, bootstrap_password]
-x-api-volume: &api-volume [fiscal_data:/data]
+x-api-volume: &api-volume [fiscal_data:/data, "./secrets:/run/customer-secrets:ro"]
 x-api-tmpfs: &api-tmpfs ["/run/app-secrets:rw,noexec,nosuid,size=64k,mode=0700"]
 x-api-build: &api-build
   context: ../..
@@ -48,6 +60,28 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  cbs-worker:
+    build: *api-build
+    image: ${API_IMAGE:-client-fiscal-api:local}
+    command: ["python", "-m", "app.self_cbs_runner"]
+    environment: *api-environment
+    secrets: *api-secrets
+    volumes: *api-volume
+    tmpfs: *api-tmpfs
+    depends_on:
+      setup: {condition: service_completed_successfully}
+      api: {condition: service_healthy}
+    restart: unless-stopped
+    init: true
+    networks: [internal]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,time; assert time.time()-os.stat('/data/.cbs-worker-heartbeat').st_mtime < 600"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   web:
     build:

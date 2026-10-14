@@ -27,6 +27,10 @@ def test_installation_secret_generator_keeps_files_private(tmp_path, monkeypatch
     assert (tmp_path / ".env").read_text().startswith("COMPOSE_PROJECT_NAME=tenant-a\n")
     assert len((tmp_path / "secrets" / "signing-key").read_text().strip()) >= 32
     assert (tmp_path / "secrets" / "admin-password").read_text().strip() == "StrongPassword-123"
+    monkeypatch.setattr(installer.getpass, "getpass", lambda prompt: "AuthorizedMatrixSecret-123")
+    monkeypatch.setattr(sys, "argv", [str(script), "--set-cbs-client-secret"])
+    installer.main()
+    assert (tmp_path / "secrets" / "cbs-client-secret").read_text().strip() == "AuthorizedMatrixSecret-123"
     if os.name != "nt":
         assert all(path.stat().st_mode & 0o077 == 0 for path in
                    (tmp_path / ".env", *(tmp_path / "secrets").iterdir()))
@@ -45,10 +49,14 @@ def test_root_entrypoint_stages_secrets_then_drops_privileges(tmp_path, monkeypa
     password = tmp_path / "admin-password"
     signing.write_text("secret-key-test-value\n")
     password.write_text("one-time-password\n")
+    cbs = tmp_path / "cbs-client-secret"
+    cbs.write_text("credential\n")
     signing.chmod(0o600)
     password.chmod(0o600)
+    cbs.chmod(0o600)
     monkeypatch.setenv("SECRET_KEY_FILE", str(signing))
     monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD_FILE", str(password))
+    monkeypatch.setenv("CBS_CLIENT_SECRET_FILE", str(cbs))
     events = []
     monkeypatch.setattr(entrypoint.os, "geteuid", lambda: 0)
     monkeypatch.setattr(entrypoint.os, "chown", lambda *args: events.append(("chown", args[1:])))
@@ -69,10 +77,13 @@ def test_root_entrypoint_stages_secrets_then_drops_privileges(tmp_path, monkeypa
     with pytest.raises(Executed):
         entrypoint.main(["python", "-m", "app.self_setup"])
     assert events[-4:-1] == [("groups", []), ("gid", 10001), ("uid", 10001)]
-    staged = [entrypoint.SECRET_DIR / "signing-key", entrypoint.SECRET_DIR / "admin-password"]
-    assert [path.read_text() for path in staged] == ["secret-key-test-value\n", "one-time-password\n"]
+    staged = [entrypoint.SECRET_DIR / "signing-key", entrypoint.SECRET_DIR / "admin-password",
+              entrypoint.SECRET_DIR / "cbs-client-secret"]
+    assert [path.read_text() for path in staged] == ["secret-key-test-value\n", "one-time-password\n",
+                                                   "credential\n"]
     assert events[-1][3]["SECRET_KEY_FILE"] == str(staged[0])
     assert events[-1][3]["BOOTSTRAP_ADMIN_PASSWORD_FILE"] == str(staged[1])
+    assert events[-1][3]["CBS_CLIENT_SECRET_FILE"] == str(staged[2])
     assert all(path.stat().st_mode & 0o077 == 0 for path in staged)
 
 
@@ -102,7 +113,7 @@ def test_self_setup_login_collect_and_reconcile_without_remote_services(tmp_path
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert connection.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "20261014_0004"
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "20261014_0005"
     if os.name != "nt":
         assert data.stat().st_mode & 0o077 == 0
         assert database.stat().st_mode & 0o077 == 0
