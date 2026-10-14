@@ -18,7 +18,7 @@ class InstallerBrandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             icon = Path(directory) / "marca.ico"
             icon.write_bytes(b"\x00\x00\x01\x00" + b"0" * 12)
-            self.assertEqual(validate_path(icon, icon=True), icon)
+            self.assertEqual(validate_path(icon, icon=True), icon.resolve())
             icon.with_name("marca;maliciosa.ico").write_bytes(icon.read_bytes())
             with self.assertRaises(ValueError):
                 validate_path(icon.with_name("marca;maliciosa.ico"), icon=True)
@@ -36,7 +36,7 @@ class InstallerBrandTests(unittest.TestCase):
         args = compiler_args(Path("C:/Inno/ISCC.exe"), Path("C:/repo"), "0.2.0",
                              "Marca do Cliente", "Empresa Cliente", Path("C:/repo/marca.ico"))
         self.assertIn("/DAPP_DISPLAY_NAME=Marca do Cliente", args)
-        self.assertIn("/DAPP_ICON_PATH=C:/repo/marca.ico", args)
+        self.assertIn(f"/DAPP_ICON_PATH={Path('C:/repo/marca.ico')}", args)
 
 
 if __name__ == "__main__":
