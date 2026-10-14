@@ -3,10 +3,16 @@ param(
   [ValidateSet('Install','Start','Stop','Status','Uninstall','Protect')]
   [string]$Action,
   [Alias('Home')][string]$DataHome = (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'FiscalXmlCollector'),
-  [string]$InstallDir = (Split-Path -Parent $PSCommandPath)
+  [string]$InstallDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($InstallDir)) {
+  $scriptFile = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+  if ([string]::IsNullOrWhiteSpace($scriptFile)) { throw 'Diretório do script de serviço não encontrado.' }
+  $InstallDir = $scriptFile
+}
+if (-not [IO.Path]::IsPathRooted($InstallDir)) { throw 'InstallDir deve ser absoluto.' }
 $serviceId = 'FiscalXmlCollector'
 $wrapper = Join-Path $InstallDir "$serviceId.exe"
 $serviceXml = Join-Path $InstallDir "$serviceId.xml"
