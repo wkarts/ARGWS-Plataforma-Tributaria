@@ -71,7 +71,7 @@ begin
     an in-use worker. PrepareToInstall may observe an already stopped service. }
   ServiceWasRunning := False;
   PostInstallFailed := False;
-  Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+  Result := ExecWithNativeSysDir(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
     '-NoProfile -NonInteractive -Command "if ((Get-Service -Name FiscalXmlCollector -ErrorAction SilentlyContinue).Status -eq ''Running'') { exit 0 } else { exit 1 }"',
     '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
   if Result then ServiceWasRunning := ExitCode = 0;
@@ -89,7 +89,7 @@ begin
     ExpandConstant('{app}\manage-service.ps1') + '" -Action ' + ActionName +
     ' -Home "' + ExpandConstant('{commonappdata}\FiscalXmlCollector') + '"';
   ExitCode := -1;
-  Started := ExecAndCaptureOutput(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+  Started := ExecAndCaptureOutputWithNativeSysDir(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
     Params, '', SW_SHOWNORMAL, ewWaitUntilTerminated, ExitCode, Output);
   if (not Started) or (ExitCode <> 0) then begin
     Log('A operação ' + ActionName + ' do serviço retornou código ' + IntToStr(ExitCode));
@@ -112,7 +112,7 @@ begin
   Result := '';
   PowerShell := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
   if ServiceWasRunning then begin
-    if (not Exec(PowerShell, '-NoProfile -NonInteractive -Command "if ((Get-Service -Name FiscalXmlCollector -ErrorAction SilentlyContinue).Status -eq ''Running'') { Stop-Service -Name FiscalXmlCollector -ErrorAction Stop; (Get-Service -Name FiscalXmlCollector).WaitForStatus(''Stopped'', [TimeSpan]::FromSeconds(45)) }"', '', SW_HIDE, ewWaitUntilTerminated, ExitCode)) or (ExitCode <> 0) then
+    if (not ExecWithNativeSysDir(PowerShell, '-NoProfile -NonInteractive -Command "if ((Get-Service -Name FiscalXmlCollector -ErrorAction SilentlyContinue).Status -eq ''Running'') { Stop-Service -Name FiscalXmlCollector -ErrorAction Stop; (Get-Service -Name FiscalXmlCollector).WaitForStatus(''Stopped'', [TimeSpan]::FromSeconds(45)) }"', '', SW_HIDE, ewWaitUntilTerminated, ExitCode)) or (ExitCode <> 0) then
       Result := 'Não foi possível parar o serviço para atualizar os binários. Tente novamente após parar o serviço.';
   end;
 end;
