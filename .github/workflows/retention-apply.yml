@@ -1,0 +1,39 @@
+name: Retention apply (manual only)
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Digite APPLY_SAFE_RETENTION após revisar o relatório e allowlist de IDs'
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: write
+  packages: write
+concurrency:
+  group: fiscal-retention-manual
+  cancel-in-progress: false
+jobs:
+  prune:
+    if: ${{ inputs.confirm == 'APPLY_SAFE_RETENTION' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - name: Guarded cleanup of aged scoped caches and explicitly allowlisted untagged versions
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_CLEANUP_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_OWNER_TYPE: user
+        run: |
+          python3 scripts/retention.py --report retention.json --apply --confirm APPLY_SAFE_RETENTION
+          cat retention.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fiscal-retention-apply-${{ github.run_id }}
+          path: retention.json
+          if-no-files-found: warn
+          retention-days: 30

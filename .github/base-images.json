@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "owner": "wkarts",
+  "rule": "Uma tag de base publicada é canônica. Para atualizar, altere o sufixo rN no manifesto e nos Dockerfiles dependentes.",
+  "bases": [
+    {"component": "python", "package": "reforma-tributaria-base-python", "tag": "py3.13-r1", "dockerfile": "infra/docker/base/python.Dockerfile", "platforms": "linux/amd64,linux/arm64"},
+    {"component": "node", "package": "reforma-tributaria-base-node", "tag": "node22-r1", "dockerfile": "infra/docker/base/node.Dockerfile", "platforms": "linux/amd64,linux/arm64"},
+    {"component": "nginx", "package": "reforma-tributaria-base-nginx", "tag": "nginx1.30-r1", "dockerfile": "infra/docker/base/nginx.Dockerfile", "platforms": "linux/amd64,linux/arm64"},
+    {"component": "postgres", "package": "reforma-tributaria-base-postgres", "tag": "pg17-r1", "dockerfile": "infra/docker/base/postgres.Dockerfile", "platforms": "linux/amd64,linux/arm64"},
+    {"component": "redis", "package": "reforma-tributaria-base-redis", "tag": "redis7.4-r1", "dockerfile": "infra/docker/base/redis.Dockerfile", "platforms": "linux/amd64,linux/arm64"},
+    {"component": "rabbitmq", "package": "reforma-tributaria-base-rabbitmq", "tag": "rabbit4.1-r1", "dockerfile": "infra/docker/base/rabbitmq.Dockerfile", "platforms": "linux/amd64,linux/arm64"},
+    {"component": "objectstore", "package": "reforma-tributaria-base-objectstore", "tag": "rustfs1.0.1-r1", "dockerfile": "infra/docker/base/objectstore.Dockerfile", "platforms": "linux/amd64,linux/arm64"}
+  ]
+}

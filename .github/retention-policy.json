@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "cache_age_days": 21,
+  "ghcr_age_days": 45,
+  "max_deletions_per_run": 20,
+  "cache_key_prefixes": ["buildkit-"],
+  "image_packages": ["reforma-tributaria-api", "reforma-tributaria-web"],
+  "protected_packages": ["reforma-tributaria-base-python", "reforma-tributaria-base-node", "reforma-tributaria-base-nginx", "reforma-tributaria-base-postgres", "reforma-tributaria-base-redis", "reforma-tributaria-base-rabbitmq", "reforma-tributaria-base-objectstore"],
+  "allowed_untagged_version_ids": [],
+  "rule": "Toda versão GHCR com qualquer tag, toda imagem-base e toda versão sem ID explicitamente aprovado são preservadas. Nunca apagar uma versão usada por digest em deploy ou rollback."
+}

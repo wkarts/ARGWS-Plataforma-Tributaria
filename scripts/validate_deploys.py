@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""Valida contratos estáticos de deploy e, com --docker, parse do Docker Compose."""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+from generate_deploys import CHANNELS, DEPLOY, ROOT, TARGETS, run as check_generated
+from version import read_version
+
+
+def static_checks() -> list[str]:
+    errors: list[str] = []
+    version = read_version()
+    compose = (DEPLOY / "compose.yaml").read_text(encoding="utf-8")
+    for service in ("migrate", "bootstrap", "api", "worker", "scheduler", "web", "postgres", "redis", "rabbitmq", "objectstore"):
+        if f"  {service}:\n" not in compose:
+            errors.append(f"Serviço ausente: {service}")
+    for required in ("service_completed_successfully", "service_healthy", "no-new-privileges:true", "${APP_TAG:?", "volumes:", "WEB_BIND_ADDRESS"):
+        if required not in compose:
+            errors.append(f"Contrato de Compose ausente: {required}")
+    for prohibited in ("/var/run/docker.sock", "privileged: true", "down -v", "network_mode: host", "container_name:", "--forwarded-allow-ips\", \"*"):
+        if prohibited in compose:
+            errors.append(f"Configuração de risco: {prohibited}")
+    for target in (None, *TARGETS):
+        for channel in CHANNELS:
+            directory = DEPLOY / target / channel if target else DEPLOY / channel
+            env = (directory / ".env.example").read_text(encoding="utf-8")
+            if channel == "production" and "APP_TAG=CHANGE_ME_TO_RELEASE_TAG" not in env:
+                errors.append(f"Produção sem tag explícita: {directory}")
+            if channel == "develop" and "APP_TAG=develop" not in env:
+                errors.append(f"Develop sem tag: {directory}")
+            for key in ("SECRET_KEY", "BOOTSTRAP_ADMIN_EMAIL", "BOOTSTRAP_ADMIN_PASSWORD", "POSTGRES_PASSWORD", "REDIS_PASSWORD", "RABBITMQ_DEFAULT_PASS", "S3_ACCESS_KEY", "S3_SECRET_KEY"):
+                if not re.search(rf"^{key}=$", env, re.MULTILINE):
+                    errors.append(f"Segredo com default ou ausente: {directory}/{key}")
+            if not env.count("COMPOSE_PROJECT_NAME=") == 1:
+                errors.append(f"Projeto Compose inválido: {directory}")
+    manifest = (ROOT / ".github" / "base-images.json")
+    if not manifest.is_file():
+        errors.append("Manifesto de imagens-base ausente")
+    if not version:
+        errors.append("VERSION ausente")
+    return errors
+
+
+def docker_checks() -> list[str]:
+    errors: list[str] = []
+    for target in (None, *TARGETS):
+        for channel in CHANNELS:
+            directory = DEPLOY / target / channel if target else DEPLOY / channel
+            content = (directory / ".env.example").read_text(encoding="utf-8")
+            content = content.replace("APP_TAG=CHANGE_ME_TO_RELEASE_TAG", f"APP_TAG=v{read_version()}")
+            for key in ("SECRET_KEY", "BOOTSTRAP_ADMIN_EMAIL", "BOOTSTRAP_ADMIN_PASSWORD", "POSTGRES_PASSWORD", "REDIS_PASSWORD", "RABBITMQ_DEFAULT_PASS", "S3_ACCESS_KEY", "S3_SECRET_KEY"):
+                content = re.sub(rf"^{key}=$", f"{key}=testvalue-for-compose-only", content, flags=re.MULTILINE)
+            with tempfile.TemporaryDirectory() as tmp:
+                env = Path(tmp) / "test.env"
+                env.write_text(content, encoding="utf-8")
+                result = subprocess.run(
+                    ["docker", "compose", "--project-directory", str(directory), "--env-file", str(env), "-f", str(directory / "compose.yaml"), "config", "--quiet"],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
+                )
+                if result.returncode:
+                    errors.append(f"{directory.relative_to(ROOT)}: {result.stderr.strip()[:300]}")
+    return errors
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--docker", action="store_true")
+    args = parser.parse_args()
+    errors = []
+    if check_generated(True):
+        errors.append("Templates divergentes")
+    errors.extend(static_checks())
+    if args.docker:
+        errors.extend(docker_checks())
+    if errors:
+        print("\n".join("ERRO: " + e for e in errors), file=sys.stderr)
+        raise SystemExit(1)
+    print("OK: contratos de infra e variantes de deploy")

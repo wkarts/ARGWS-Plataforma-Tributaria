@@ -1,0 +1,99 @@
+name: Windows GUI deployer
+on:
+  pull_request:
+    paths: ['tools/deployer/**', 'deploy/**', 'scripts/version.py', '.github/workflows/deployer-windows.yml']
+  workflow_call:
+    inputs:
+      staging_tag:
+        description: Draft release tag used to transfer verified binaries to the publisher
+        required: true
+        type: string
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    permissions: {contents: write}
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - name: Verify templates and deployer behavior
+        shell: pwsh
+        run: |
+          python scripts/version.py check
+          if ($LASTEXITCODE -ne 0) { throw 'Version drift' }
+          python scripts/validate_deploys.py
+          if ($LASTEXITCODE -ne 0) { throw 'Invalid deploys' }
+          python -m unittest discover -s tools/deployer -p 'test_*.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Deployer tests failed' }
+      - name: Build CLI and GUI executable
+        shell: pwsh
+        run: |
+          python -m pip install -r tools/deployer/requirements-build.txt
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller install failed' }
+          python -m PyInstaller --clean --noconfirm --onefile --console `
+            --name reforma-tributaria-deployer-win-x64 --distpath dist `
+            --add-data 'deploy;deploy' --add-data 'VERSION;.' `
+            tools/deployer/deployer.py
+          if ($LASTEXITCODE -ne 0) { throw 'CLI build failed' }
+          python -m PyInstaller --clean --noconfirm --onefile --windowed `
+            --name reforma-tributaria-deployer-gui-win-x64 --distpath dist `
+            tools/deployer/gui.py
+          if ($LASTEXITCODE -ne 0) { throw 'GUI build failed' }
+      - name: Smoke both binaries and verify PE x64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($filename in @('reforma-tributaria-deployer-win-x64.exe', 'reforma-tributaria-deployer-gui-win-x64.exe')) {
+            $path = (Resolve-Path "dist/$filename").Path
+            $bytes = [IO.File]::ReadAllBytes($path)
+            if ($bytes.Length -lt 512 -or $bytes[0] -ne 77 -or $bytes[1] -ne 90) { throw "Invalid PE: $filename" }
+            $pe = [BitConverter]::ToInt32($bytes, 0x3c)
+            if ([BitConverter]::ToUInt16($bytes, $pe + 4) -ne 0x8664) { throw "Not AMD64: $filename" }
+          }
+          $cli = (Resolve-Path 'dist/reforma-tributaria-deployer-win-x64.exe').Path
+          & $cli version
+          if ($LASTEXITCODE -ne 0) { throw 'CLI version smoke failed' }
+          & $cli list
+          if ($LASTEXITCODE -ne 0) { throw 'CLI list smoke failed' }
+          $output = Join-Path $env:RUNNER_TEMP 'reforma-deployer-smoke'
+          & $cli generate --target docker --channel production --output $output --admin-email admin@example.org
+          if ($LASTEXITCODE -ne 0) { throw 'CLI generate smoke failed' }
+          & $cli validate --directory $output
+          if ($LASTEXITCODE -ne 0) { throw 'CLI validate smoke failed' }
+          $gui = Start-Process -FilePath (Resolve-Path 'dist/reforma-tributaria-deployer-gui-win-x64.exe').Path -ArgumentList '--smoke-test' -PassThru -Wait
+          if ($gui.ExitCode -ne 0) { throw 'GUI smoke failed' }
+      - name: Package EXEs and checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/release | Out-Null
+          Copy-Item dist/*-win-x64.exe dist/release/
+          Copy-Item tools/deployer/README.md dist/release/README-Deployer.md
+          Compress-Archive -CompressionLevel Optimal -Path dist/release/*.exe,dist/release/README-Deployer.md `
+            -DestinationPath dist/release/Reforma-Tributaria-Deployer-GUI-Windows-x64.zip
+          $lines = foreach ($file in (Get-ChildItem dist/release -File | Sort-Object Name)) {
+            $sha = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
+            "$sha  $($file.Name)"
+          }
+          $lines | Set-Content -Encoding ascii dist/release/SHA256SUMS.txt
+      - name: Stage verified deployer binaries for publication
+        if: inputs.staging_tag != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAGING_TAG: ${{ inputs.staging_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Copy-Item dist/release/SHA256SUMS.txt dist/release/SHA256SUMS-deployer.txt
+          gh release upload $env:STAGING_TAG `
+            dist/release/reforma-tributaria-deployer-win-x64.exe `
+            dist/release/reforma-tributaria-deployer-gui-win-x64.exe `
+            dist/release/Reforma-Tributaria-Deployer-GUI-Windows-x64.zip `
+            dist/release/README-Deployer.md `
+            dist/release/SHA256SUMS-deployer.txt `
+            --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'Deployer staging failed' }
