@@ -1,6 +1,6 @@
 ARG NODE_BASE=ghcr.io/wkarts/reforma-tributaria-base-node:node22-r1
 ARG NGINX_BASE=ghcr.io/wkarts/reforma-tributaria-base-nginx:nginx1.30-r1
-FROM ${NODE_BASE} AS build
+FROM --platform=$BUILDPLATFORM ${NODE_BASE} AS build
 WORKDIR /app
 COPY apps/web/package.json apps/web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
