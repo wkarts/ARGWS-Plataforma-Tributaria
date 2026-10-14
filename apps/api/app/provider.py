@@ -194,7 +194,9 @@ class ReceitaProvider:
             headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
             async with httpx.AsyncClient(timeout=25, follow_redirects=False) as client:
                 response = await client.request(method, url, headers=headers, **kwargs)
-            if response.status_code != 401 or attempt:
+            # Opening is not idempotent remotely. A 401 must never cause an
+            # implicit second POST; only repeat read-only requests with a new token.
+            if response.status_code != 401 or attempt or method.upper() not in {"GET", "HEAD"}:
                 return response
             if self.settings.self_hosted:
                 async with _local_token_lock:
@@ -216,7 +218,8 @@ class ReceitaProvider:
             response = await self.authorized("POST", url, json={"urlRetorno": webhook})
             if response.status_code != 201:
                 raise ProviderError(f"Abertura recusada pela Receita (HTTP {response.status_code})",
-                    retryable=response.status_code in {429}, uncertain=response.status_code >= 500)
+                    retryable=response.status_code in {429},
+                    uncertain=response.status_code >= 500 or response.status_code == 401)
             ticket = response.json().get("tiqueteSolicitacao")
             if not isinstance(ticket, str) or not 1 <= len(ticket) <= 200:
                 raise ProviderError("Tíquete inválido na resposta oficial", uncertain=True)

@@ -12,6 +12,7 @@ import textwrap
 import pytest
 
 from app.config import Settings
+from app.provider import ProviderError, ReceitaProvider
 from app.self_cbs_runner import exclusive_lock
 
 
@@ -59,6 +60,85 @@ def test_only_one_local_runner_can_hold_the_volume_lock(tmp_path):
         os.close(first)
     second = exclusive_lock(tmp_path / ".cbs-worker.lock")
     os.close(second)
+
+
+def test_non_idempotent_open_is_not_replayed_after_unauthorized(monkeypatch):
+    from app import provider as provider_module
+    attempts = []
+    tokens = []
+
+    class Response:
+        status_code = 401
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        async def request(self, method, url, **kwargs):
+            attempts.append((method, url))
+            return Response()
+
+    monkeypatch.setattr(provider_module.httpx, "AsyncClient", Client)
+    provider = ReceitaProvider(Settings(cbs_client_id="matrix",
+        cbs_client_secret="test-secret", cbs_token_url="https://api.receitafederal.gov.br/token"))
+    async def token():
+        tokens.append("token")
+        return "expired-token"
+    monkeypatch.setattr(provider, "token", token)
+    import asyncio
+    with pytest.raises(ProviderError) as error:
+        asyncio.run(provider.open("debitos", "12345678", "restricted", "https://callback.example/one"))
+    assert error.value.uncertain
+    assert len(attempts) == len(tokens) == 1
+
+
+def test_safe_get_can_refresh_token_after_unauthorized(monkeypatch):
+    from app import provider as provider_module
+    attempts = []
+    tokens = iter(("expired-token", "renewed-token"))
+
+    class Response:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        async def request(self, method, url, **kwargs):
+            attempts.append(kwargs["headers"]["Authorization"])
+            return Response(401 if len(attempts) == 1 else 200)
+
+    monkeypatch.setattr(provider_module.httpx, "AsyncClient", Client)
+    provider = ReceitaProvider(Settings(cbs_client_id="matrix", cbs_client_secret="test-secret",
+        cbs_token_url="https://api.receitafederal.gov.br/token", deployment_mode="self"))
+    async def token():
+        return next(tokens)
+    monkeypatch.setattr(provider, "token", token)
+    import asyncio
+    assert asyncio.run(provider.authorized("GET", "https://api.receitafederal.gov.br/status")).status_code == 200
+    assert attempts == ["Bearer expired-token", "Bearer renewed-token"]
+
+
+def test_worker_rechecks_each_credential_scope(monkeypatch):
+    from app import worker
+    allowed = Settings(provider_mode="receita", cbs_credential_organization_id="matrix-org",
+        cbs_allowed_bases="12345678", cbs_restricted_enabled=True)
+    monkeypatch.setattr(worker, "settings", allowed)
+    check = worker.authorization_rejection
+    assert check("matrix-org", "12345678", "debitos", "restricted") is None
+    assert check("different-org", "12345678", "debitos", "restricted") is not None
+    assert check("matrix-org", "87654321", "debitos", "restricted") is not None
+    assert check("matrix-org", "12345678", "debitos", "production") is not None
+    assert check("matrix-org", "12345678", "pagamentos", "restricted") is not None
+    monkeypatch.setattr(worker, "settings", allowed.model_copy(update={"cbs_restricted_enabled": False}))
+    assert check("matrix-org", "12345678", "debitos", "restricted") is not None
 
 
 def test_self_restricted_query_compares_simulated_receipt_with_xml(tmp_path):
@@ -195,6 +275,19 @@ def test_self_restricted_query_compares_simulated_receipt_with_xml(tmp_path):
             assert preview.json()['coverage']['official_receipts'] == 1
             assert preview.json()['summary']['match'] == 1
             assert calls == {'token': 1, 'open': 1, 'status': 1, 'download': 1}
+            revoked = client.post('/api/v1/queries', headers=auth | {
+                'Idempotency-Key': 'queued-before-revocation'}, json={
+                    'company_id': company, 'resource': 'creditos', 'environment': 'restricted'})
+            assert revoked.status_code == 202, revoked.text
+            worker.settings = get_settings().model_copy(update={'cbs_allowed_bases': ''})
+            assert asyncio.run(worker.run_tick()) == 1
+            assert client.get('/api/v1/queries/' + revoked.json()['id'], headers=auth).json()['status'] == 'failed'
+            assert calls == {'token': 1, 'open': 1, 'status': 1, 'download': 1}
+            worker.settings = get_settings()
+            queued_with_one_branch = client.post('/api/v1/queries', headers=auth | {
+                'Idempotency-Key': 'queued-before-new-branch'}, json={
+                    'company_id': company, 'resource': 'creditos', 'environment': 'restricted'})
+            assert queued_with_one_branch.status_code == 202, queued_with_one_branch.text
             other = client.post('/api/v1/companies', headers=auth,
                 json={'name': 'Outra raiz', 'cnpj': '87654321000198'})
             assert other.status_code == 201, other.text
@@ -206,6 +299,10 @@ def test_self_restricted_query_compares_simulated_receipt_with_xml(tmp_path):
             sibling = client.post('/api/v1/companies', headers=auth,
                 json={'name': 'Filial B', 'cnpj': '12345678000276'})
             assert sibling.status_code == 201, sibling.text
+            assert asyncio.run(worker.run_tick()) == 1
+            assert client.get('/api/v1/queries/' + queued_with_one_branch.json()['id'],
+                headers=auth).json()['status'] == 'failed'
+            assert calls == {'token': 1, 'open': 1, 'status': 1, 'download': 1}
             ambiguous = client.post('/api/v1/queries', headers=auth | {
                 'Idempotency-Key': 'branch-blocked-123'}, json={
                     'company_id': sibling.json()['id'], 'resource': 'creditos',
