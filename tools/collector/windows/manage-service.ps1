@@ -74,6 +74,9 @@ function Set-PrivateAcl([string]$Path, [bool]$Directory) {
 function Protect-Home {
   Assert-Administrator
   Assert-Home
+  # A shell launching Setup can supply a PSModulePath from PowerShell 7.
+  # Resolve the Windows PowerShell 5.1 security module from its own PSHOME.
+  Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
   New-Item -ItemType Directory -Path $DataHome -Force | Out-Null
   # Preserve the existing SQLite, profiles and XML spool on upgrades; limit access in place.
   # Faça a verificação de links antes de alterar qualquer ACL do estado.
