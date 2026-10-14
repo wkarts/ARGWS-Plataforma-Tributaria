@@ -1,17 +1,19 @@
 import asyncio
+from decimal import Decimal
 from hashlib import sha256
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import select
 from sqlalchemy.pool import StaticPool
 
 from app.config import get_settings
 from app.db import get_session
 from app.documents import router
 from app.reconciliation_api import router as reconciliation_router
-from app.models import Base, Company, Organization, User
+from app.models import Base, Company, Organization, Query, Record, User
 from app.security import hash_password, issue_token
 from app.storage import BlobStore
 from app.xml_parser import parse_fiscal_xml
@@ -239,3 +241,109 @@ def test_reconciliation_reports_xml_excluded_for_missing_competence(api):
     assert result.status_code == 200
     assert result.json()["unperioded_document_count"] == 1
     assert result.json()["summary"]["total"] == 0
+
+
+def test_assisted_preview_api_reports_declared_totals_without_claiming_verification(api):
+    client, (admin_a, admin_b, _, company_a, _, company_a2), _ = api
+    assert upload(client, admin_a, company_a).status_code == 201
+    response = client.get(f"/api/v1/assisted-preview?company_id={company_a}&period=2026-10",
+                          headers=bearer(admin_a))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "preliminary_unvalidated"
+    assert body["coverage"]["official_cbs_complete"] is False
+    assert body["coverage"]["signature_cryptographically_verified"] is False
+    assert body["coverage"]["official_receipts"] == 0
+    assert {(entry["tax"], entry["model"]): entry["amount"] for entry in body["totals"]} == {
+        ("CBS", "55"): "0.90", ("IBS", "55"): "0.10",
+    }
+    assert body["items"][0]["source_sha256"] == sha256(XML).hexdigest()
+    assert body["items"][0]["record_ids"] == []
+    assert client.get(f"/api/v1/assisted-preview?company_id={company_a}&period=2026-10",
+                      headers=bearer(admin_b)).status_code == 404
+    assert client.get(f"/api/v1/assisted-preview?company_id={company_a2}&period=2026-10",
+                      headers=bearer(admin_a)).json()["totals"] == []
+    assert client.get(f"/api/v1/assisted-preview?company_id={company_a}&period=2026-13",
+                      headers=bearer(admin_a)).status_code == 422
+
+
+def test_parser_keeps_alphanumeric_access_key_as_unverified_claim():
+    alpha_key = KEY[:10] + "A" + KEY[11:]
+    metadata = parse_fiscal_xml(XML.replace(KEY.encode(), alpha_key.encode()), CNPJ)
+    assert metadata.document_key == alpha_key
+    assert metadata.authorization_status == "reported_authorized"
+    assert metadata.signature_present is True
+
+
+def test_nfce_model_65_is_classified_and_included_from_actual_xml_parser(api):
+    client, (admin_a, _, _, company_a, _, _), _ = api
+    nfce = XML.replace(b"<mod>55</mod>", b"<mod>65</mod>")
+    parsed = parse_fiscal_xml(nfce, CNPJ)
+    assert (parsed.kind, parsed.model, parsed.direction) == ("nfce", "65", "outgoing")
+    ingested = upload(client, admin_a, company_a, nfce)
+    assert ingested.status_code == 201, ingested.text
+    assert (ingested.json()["kind"], ingested.json()["model"]) == ("nfce", "65")
+    preview = client.get(f"/api/v1/assisted-preview?company_id={company_a}&period=2026-10",
+                         headers=bearer(admin_a)).json()
+    assert {(x["tax"], x["direction"], x["model"], x["amount"]) for x in preview["totals"]} == {
+        ("CBS", "outgoing", "65", "0.90"), ("IBS", "outgoing", "65", "0.10"),
+    }
+
+
+def test_cte_model_57_is_classified_and_included_from_actual_xml_parser(api):
+    client, (admin_a, _, _, company_a, _, _), _ = api
+    cte = (f'<cteProc xmlns="http://www.portalfiscal.inf.br/cte"><CTe>'
+           f'<infCte Id="CTe{KEY}"><ide><mod>57</mod><dhEmi>2026-10-14T10:30:00-03:00</dhEmi></ide>'
+           f'<emit><CNPJ>{CNPJ}</CNPJ></emit><dest><CNPJ>{OTHER_CNPJ}</CNPJ></dest>'
+           '<vPrest><vTPrest>100.00</vTPrest></vPrest>'
+           '<total><IBSCBSTot><gCBS><vCBS>0.80</vCBS></gCBS>'
+           '<gIBS><vIBS>0.08</vIBS></gIBS></IBSCBSTot></total></infCte>'
+           '<Signature xmlns="http://www.w3.org/2000/09/xmldsig#" /></CTe>'
+           f'<protCTe><infProt><chCTe>{KEY}</chCTe><cStat>100</cStat>'
+           '</infProt></protCTe></cteProc>').encode()
+    parsed = parse_fiscal_xml(cte, CNPJ)
+    assert (parsed.kind, parsed.model, parsed.direction) == ("cte", "57", "outgoing")
+    ingested = upload(client, admin_a, company_a, cte)
+    assert ingested.status_code == 201, ingested.text
+    preview = client.get(f"/api/v1/assisted-preview?company_id={company_a}&period=2026-10",
+                         headers=bearer(admin_a)).json()
+    assert {(x["tax"], x["direction"], x["model"], x["amount"]) for x in preview["totals"]} == {
+        ("CBS", "outgoing", "57", "0.80"), ("IBS", "outgoing", "57", "0.08"),
+    }
+
+
+def test_assisted_preview_excludes_fixture_receipts_but_traces_completed_official_import(api):
+    client, (admin_a, _, _, company_a, _, _), _ = api
+    assert upload(client, admin_a, company_a).status_code == 201
+
+    async def store_receipts():
+        dependency = client.app.dependency_overrides[get_session]
+        async for session in dependency():
+            company = await session.scalar(select(Company).where(Company.id == company_a))
+            async with session.begin_nested():
+                for environment, amount in (("fixture", "999.00"), ("restricted", "0.90")):
+                    query = Query(organization_id=company.organization_id, company_id=company_a,
+                                  cnpj_base=company.cnpj_base, resource="debitos",
+                                  environment=environment, idempotency_key=f"preview-test-{environment}",
+                                  request_fingerprint="f" * 64, webhook_secret_hash="s" * 64,
+                                  status="completed", raw_sha256="a" * 64)
+                    session.add(query)
+                    await session.flush()
+                    session.add(Record(organization_id=company.organization_id, company_id=company_a,
+                                       query_id=query.id, resource="debitos", period="10/2026",
+                                       source_key=f"{KEY}:{environment}", amount=Decimal(amount),
+                                       raw={"chave": KEY, "cbs": {"apurado": amount}},
+                                       provenance={"receipt_sha256": "a" * 64}))
+            await session.commit()
+            break
+
+    asyncio.run(store_receipts())
+    response = client.get(f"/api/v1/assisted-preview?company_id={company_a}&period=2026-10",
+                          headers=bearer(admin_a))
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["coverage"]["official_receipts"] == 1
+    assert body["summary"] == {"total": 1, "match": 1, "mismatch": 0, "missing": 0,
+                               "ambiguous": 0, "unknown": 0}
+    assert body["items"][0]["official_amount"] == "0.90"
+    assert body["items"][0]["record_ids"]

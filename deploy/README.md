@@ -19,6 +19,8 @@ Cada diretório é autossuficiente: `compose.yaml` e `.env.example`. As configur
 
 `VERSION` na raiz é a versão estável canônica; `python3 scripts/version.py check` verifica `pyproject.toml`, `package.json` e `package-lock.json`. Um bump explícito usa `python3 scripts/version.py set X.Y.Z` no branch de trabalho. Develop atualiza a tag móvel `:develop` das imagens e **uma única** GitHub pré-release `pre-release`. Main publica `vX.Y.Z`, sem sufixos; as tags `:X.Y.Z`, `:vX.Y.Z`, `:sha-<12>`, `:main`, `:stable` e `:latest` apontam ao build aprovado. A release contém `IMAGES.txt` e `BASE-IMAGES.txt` com digests completos, pacote de deploy, executáveis Windows GUI/CLI e `SHA256SUMS.txt`. Uma release estável existente não tem seus assets substituídos pelo workflow.
 
+Estes modelos são a implantação legada baseada em imagens GHCR. O namespace em `IMAGE_OWNER` é escolhido explicitamente pelo operador; imagens obtidas do registro de origem conservam sua proveniência e o nome do pacote no próprio registro. Para a instalação self com imagens construídas na infraestrutura do cliente e SQLite, consulte `deploy/self/`; ela não precisa de um namespace GHCR.
+
 O fluxo de main constrói primeiro só `:sha-<12>`, conclui CI e os executáveis Windows, cria um draft e confere cada asset e seu checksum. Depois promove `:X.Y.Z` e `:vX.Y.Z` por digest e publica o draft. Um retry completa somente arquivos ausentes cujo hash coincide com o manifest remoto; um asset divergente interrompe a operação. As tags móveis `main/stable/latest` só avançam se o commit publicado ainda for o HEAD de main. Se uma execução falhar entre promoção e publicação, o draft completo permanece para retomada, sem apagar tags canônicas.
 
 As sete imagens-base (`python`, `node`, `nginx`, `postgres`, `redis`, `rabbitmq`, `objectstore`) constam em `.github/base-images.json`. A automação não reetiqueta uma base publicada; para atualizar o runtime, incremente `rN`, ajuste as referências dependentes e valide a compatibilidade dos dados. Imagens de API e web são publicadas para `linux/amd64` e `linux/arm64`, com SBOM e proveniência. Os pacotes Python ainda usam faixas de dependências no `pyproject.toml`, logo rebuilds de código-fonte não são bit a bit reproduzíveis; a release registra `API-DEPENDENCIES.txt` extraído da imagem publicada e os digests exatos.
@@ -28,7 +30,7 @@ As sete imagens-base (`python`, `node`, `nginx`, `postgres`, `redis`, `rabbitmq`
 O override local constrói API e web com bases públicas. Requer Docker Engine com Compose, Python 3.13 e Node 22 apenas para desenvolvimento fora dos containers. Gere um `.env` de develop com o deployer e copie o arquivo privado para `deploy/.env`, ou preencha uma cópia de `deploy/env.develop.example` com segredos fortes e e-mail administrativo real. Nunca versione `.env`.
 
 ```bash
-python3 tools/deployer/deployer.py generate --target docker --channel develop \
+python3 tools/deployer/deployer.py generate --target docker --channel develop --owner fiscal-local \
   --output /tmp/reforma-local --admin-email admin@exemplo.com.br
 cp /tmp/reforma-local/.env deploy/.env
 python3 scripts/preflight.py --env-file deploy/.env --channel develop

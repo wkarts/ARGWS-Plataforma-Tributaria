@@ -177,26 +177,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: {persist-credentials: false}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22', cache: 'npm', cache-dependency-path: apps/web/package-lock.json}
       - name: Download binary assets from the internal draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           STAGING_TAG: ${{ needs.stage.outputs.tag }}
         run: |
           set -euo pipefail
-          mkdir -p release-deployer release-collector-linux release-collector-windows
-          for file in reforma-tributaria-deployer-win-x64.exe \
-                      reforma-tributaria-deployer-gui-win-x64.exe \
-                      Reforma-Tributaria-Deployer-GUI-Windows-x64.zip \
-                      README-Deployer.md SHA256SUMS-deployer.txt; do
-            gh release download "$STAGING_TAG" --pattern "$file" --dir release-deployer --repo "$GITHUB_REPOSITORY"
-          done
-          for file in fiscal-xml-collector-linux-amd64 SHA256SUMS-collector-linux.txt; do
+          mkdir -p release-collector-linux release-collector-windows
+          for file in fiscal-xml-collector-gui-linux-x64.tar.gz SHA256SUMS-collector-linux.txt; do
             gh release download "$STAGING_TAG" --pattern "$file" --dir release-collector-linux --repo "$GITHUB_REPOSITORY"
           done
-          for file in fiscal-xml-collector-windows-amd64.exe SHA256SUMS-collector-windows.txt; do
+          for file in fiscal-xml-collector-setup-windows-x64.exe SHA256SUMS-collector-windows.txt; do
             gh release download "$STAGING_TAG" --pattern "$file" --dir release-collector-windows --repo "$GITHUB_REPOSITORY"
           done
-          mv release-deployer/SHA256SUMS-deployer.txt release-deployer/SHA256SUMS.txt
           mv release-collector-linux/SHA256SUMS-collector-linux.txt release-collector-linux/SHA256SUMS.txt
           mv release-collector-windows/SHA256SUMS-collector-windows.txt release-collector-windows/SHA256SUMS.txt
       - uses: docker/setup-buildx-action@v3
@@ -248,31 +243,41 @@ jobs:
           VERSION: ${{ needs.source.outputs.version }}
         run: |
           set -euo pipefail
-          (cd release-deployer && sha256sum -c SHA256SUMS.txt)
           python3 scripts/verify_collector_assets.py release-collector-linux release-collector-windows
-          cp release-deployer/*.exe release-files/
-          cp release-deployer/Reforma-Tributaria-Deployer-GUI-Windows-x64.zip release-files/
-          cp release-deployer/README-Deployer.md release-files/
-          cp release-collector-linux/fiscal-xml-collector-linux-amd64 release-files/
-          cp release-collector-windows/fiscal-xml-collector-windows-amd64.exe release-files/
-          cp tools/collector/README.md release-files/README-XML-Collector.md
-          cp docs/COLETOR-LOCAL-OPERACAO.md release-files/OPERACAO-XML-Collector.md
+          cp release-collector-linux/fiscal-xml-collector-gui-linux-x64.tar.gz release-files/
+          cp release-collector-windows/fiscal-xml-collector-setup-windows-x64.exe release-files/
+          cp tools/collector/systemd/README-self.md release-files/README-XML-Collector-Linux.md
+          cp tools/collector/windows/README-installer.md release-files/README-XML-Collector-Windows.md
           cp docs/CONTRATOS-OFICIAIS-2026.md release-files/CONTRATOS-OFICIAIS-2026.md
-          cp tools/collector/systemd/fiscal-xml-collector.service release-files/
-          cp tools/collector/systemd/install.sh release-files/install-fiscal-xml-collector-systemd.sh
-          cp tools/collector/systemd/uninstall.sh release-files/uninstall-fiscal-xml-collector-systemd.sh
-          cp tools/collector/windows/install-winsw.ps1 release-files/install-fiscal-xml-collector-winsw.ps1
-          cp tools/collector/windows/uninstall-winsw.ps1 release-files/uninstall-fiscal-xml-collector-winsw.ps1
           if find deploy -type f -name '.env' -print -quit | grep -q .; then
             echo 'Private .env in source; refusing release' >&2; exit 1
           fi
           label="$VERSION"
-          [[ "$CHANNEL" == develop ]] && label=develop
-          zip -q -r "release-files/Reforma-Tributaria-deploy-$label.zip" deploy scripts infra/docker/nginx.conf VERSION \
-            -x '*/.env' '*/backups/*' '*/volumes/*'
+          [[ "$CHANNEL" == develop ]] && label=preview
+          zip -q -r "release-files/Fiscal-Self-Deploy-$label.zip" deploy/self apps/api apps/web infra/docker/nginx.conf VERSION \
+            -x '*/.env' '*/secrets/*' '*/backups/*' '*/volumes/*' \
+               '*/node_modules/*' '*/dist/*' '*/.venv/*' '*/__pycache__/*' \
+               '*/*.egg-info/*' '*.pyc' '*.sqlite3' '*.db' '*.pem' '*.p12' '*.pfx' '*.log'
+          python3 - <<'PY'
+          import zipfile
+          from pathlib import Path
+          package = next(Path('release-files').glob('Fiscal-Self-Deploy-*.zip'))
+          with zipfile.ZipFile(package) as archive:
+              names = set(archive.namelist())
+              required = {'deploy/self/compose.yaml', 'deploy/self/api.Dockerfile',
+                          'deploy/self/web.Dockerfile', 'apps/api/pyproject.toml',
+                          'apps/web/package.json', 'infra/docker/nginx.conf', 'VERSION'}
+              missing = required - names
+              forbidden = [name for name in names if name.startswith('deploy/') and not name.startswith('deploy/self/')]
+              if missing or forbidden:
+                  raise SystemExit(f'Invalid self deployment archive: missing={missing}, forbidden={forbidden}')
+          PY
+          npm ci --prefix apps/web --no-audit --no-fund
+          npm run build --prefix apps/web
+          python3 scripts/audit_customer_surface.py --web-dist apps/web/dist \
+            --self-dir deploy/self --release-dir release-files
           {
             echo "Version=$VERSION"
-            echo "Channel=$CHANNEL"
             echo "Commit=$GITHUB_SHA"
             echo 'Use IMAGES.txt and BASE-IMAGES.txt for immutable registry digests.'
           } > release-files/BUILD-INFO.txt

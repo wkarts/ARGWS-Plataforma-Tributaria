@@ -1,4 +1,4 @@
-# Console web da Reforma Tributária
+# Console de gestão fiscal
 
 Frontend Vue 3 + TypeScript + Vite para a API FastAPI da plataforma. O modo claro é o padrão.
 

@@ -15,15 +15,16 @@ async def bootstrap() -> None:
     settings = get_settings()
     settings.validate_security()
     username = settings.bootstrap_admin_email.strip().lower()
-    if not username or not settings.bootstrap_admin_password:
-        raise RuntimeError("Configure BOOTSTRAP_ADMIN_EMAIL e BOOTSTRAP_ADMIN_PASSWORD como secrets")
-    if "@" not in username:
-        raise RuntimeError("BOOTSTRAP_ADMIN_EMAIL inválido")
     async with Session() as session, session.begin():
-        existing = await session.scalar(select(User).where(User.username == username))
-        if existing:
-            print(f"Administrador existente; organização: {existing.organization_id}")
-        else:
+        existing = await session.scalar(select(User).limit(1) if settings.self_hosted
+                                        else select(User).where(User.username == username))
+        if not settings.self_hosted and (not username or not settings.bootstrap_admin_password):
+            raise RuntimeError("Configure BOOTSTRAP_ADMIN_EMAIL e BOOTSTRAP_ADMIN_PASSWORD como secrets")
+        if existing is None:
+            if not username or not settings.bootstrap_admin_password:
+                raise RuntimeError("Primeira instalação exige BOOTSTRAP_ADMIN_EMAIL e BOOTSTRAP_ADMIN_PASSWORD como secrets")
+            if "@" not in username:
+                raise RuntimeError("BOOTSTRAP_ADMIN_EMAIL inválido")
             org = Organization(name="Administração")
             session.add(org)
             await session.flush()
@@ -31,6 +32,8 @@ async def bootstrap() -> None:
                         password_hash=hash_password(settings.bootstrap_admin_password), role="admin")
             session.add(user)
             print(f"Administrador criado; organização: {org.id}")
+        else:
+            print(f"Administrador existente; organização: {existing.organization_id}")
     await BlobStore(settings).ensure_bucket()
 
 

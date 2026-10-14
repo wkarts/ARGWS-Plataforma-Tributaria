@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Portable Windows interface for the stdlib Compose deployer CLI."""
+"""Interface gráfica para instalar e operar a stack no ambiente do cliente."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 
-CLI_EXE = "reforma-tributaria-deployer-win-x64.exe"
+CLI_EXE = "fiscal-deployer-worker-win-x64.exe"
 TARGETS = ("docker", "dockge", "portainer", "cloudpanel")
 CHANNELS = ("production", "develop")
 
@@ -31,6 +31,19 @@ def backend_command() -> list[str]:
     raise FileNotFoundError("deployer.py não encontrado.")
 
 
+def installation_title() -> str:
+    """O título é local à instalação; arquivos inválidos não mudam a interface."""
+    base = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+    try:
+        brand = json.loads((base / "branding.json").read_text(encoding="utf-8"))
+        name = brand.get("name", "") if isinstance(brand, dict) else ""
+        if isinstance(name, str) and 1 <= len(name.strip()) <= 80 and all(ord(char) >= 32 for char in name):
+            return name.strip()
+    except (OSError, UnicodeError, ValueError):
+        pass
+    return "Gestão Fiscal"
+
+
 def run_backend(arguments: list[str]) -> tuple[int, str]:
     command = backend_command()
     result = subprocess.run([*command, *arguments], text=True, encoding="utf-8",
@@ -43,19 +56,20 @@ def run_backend(arguments: list[str]) -> tuple[int, str]:
 class DeployerWindow(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Reforma Tributária • Deployer")
+        self.brand = installation_title()
+        self.title(f"{self.brand} • Implantação")
         self.geometry("850x720")
         self.minsize(730, 620)
         self.configure(background="#f5f7fa")
         self.vars = {
             "target": tk.StringVar(value="docker"),
             "channel": tk.StringVar(value="production"),
-            "owner": tk.StringVar(value="wkarts"),
+            "owner": tk.StringVar(),
             "admin_email": tk.StringVar(),
             "tag": tk.StringVar(),
             "bind": tk.StringVar(value="127.0.0.1"),
             "port": tk.StringVar(),
-            "output": tk.StringVar(value=str(Path.home() / "Reforma-Tributaria" / "production")),
+            "output": tk.StringVar(value=str(Path.home() / "Gestao-Fiscal" / "production")),
             "rollback_tag": tk.StringVar(),
             "force": tk.BooleanVar(value=False),
         }
@@ -65,7 +79,7 @@ class DeployerWindow(tk.Tk):
     def _build(self) -> None:
         outer = ttk.Frame(self, padding=20)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="Reforma Tributária", font=("Segoe UI", 20, "bold")).pack(anchor="w")
+        ttk.Label(outer, text=self.brand, font=("Segoe UI", 20, "bold")).pack(anchor="w")
         ttk.Label(outer, text="Gerencie modelos Docker Compose e versões publicadas no GHCR.",
                   foreground="#4b5563").pack(anchor="w", pady=(2, 14))
 
@@ -167,9 +181,12 @@ class DeployerWindow(tk.Tk):
         except json.JSONDecodeError:
             displayed = message
         self._show(displayed or "A operação terminou sem resposta.")
-        self.title("Reforma Tributária • Deployer" + (" ✓" if code == 0 else " • verifique o resultado"))
+        self.title(f"{self.brand} • Implantação" + (" ✓" if code == 0 else " • verifique o resultado"))
 
     def _template_args(self) -> list[str] | None:
+        if not self.vars["owner"].get().strip():
+            messagebox.showerror("Registro de imagens", "Informe o namespace GHCR das imagens desta instalação.")
+            return None
         args = ["--target", self.vars["target"].get(), "--channel", self.vars["channel"].get(),
                 "--owner", self.vars["owner"].get().strip(), "--bind", self.vars["bind"].get().strip()]
         tag = self.vars["tag"].get().strip()

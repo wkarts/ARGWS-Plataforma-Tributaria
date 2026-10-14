@@ -1,0 +1,21 @@
+[Unit]
+Description=Fiscal XML Collector - coleta local multiperfil
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fiscal-collector
+Group=fiscal-collector
+ExecStart=/opt/fiscal-xml-collector/fiscal-xml-worker-linux-x64 --home @HOME@ serve
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@HOME@
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

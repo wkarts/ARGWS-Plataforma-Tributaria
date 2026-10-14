@@ -11,9 +11,9 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  --navy: #102743;
-  --blue: #255896;
-  --blue-dark: #1a447a;
+  --navy: var(--brand-secondary, #102743);
+  --blue: var(--brand-primary, #255896);
+  --blue-dark: color-mix(in srgb, var(--blue), black 20%);
   --line: #e2e9f0;
   --muted: #728399;
   --surface: #fff;
@@ -102,7 +102,7 @@ h2 {
     "Segoe UI",
     sans-serif;
   font-weight: 800;
-  color: #173857;
+  color: color-mix(in srgb, var(--navy), black 55%);
   letter-spacing: -0.04em;
 }
 .brand-mark {
@@ -113,8 +113,8 @@ h2 {
   place-items: center;
   flex: none;
   border-radius: 12px;
-  background: #214d83;
-  color: #fff;
+  background: var(--blue);
+  color: var(--brand-primary-on, #fff);
   font-family:
     Inter,
     system-ui,
@@ -125,6 +125,12 @@ h2 {
   font-weight: 800;
   font-size: 18px;
   letter-spacing: -0.09em;
+}
+.brand-logo {
+  width: 43px;
+  height: 43px;
+  object-fit: contain;
+  flex: none;
 }
 .brand-dot {
   width: 6px;
@@ -149,8 +155,8 @@ h2 {
 .auth-intro {
   position: relative;
   background:
-    radial-gradient(circle at 84% 20%, #2b689e 0%, transparent 40%),
-    linear-gradient(145deg, #173c67, #112a4b 62%, #102544);
+    radial-gradient(circle at 84% 20%, color-mix(in srgb, var(--blue), black 35%) 0%, transparent 40%),
+    linear-gradient(145deg, color-mix(in srgb, var(--blue), black 45%), color-mix(in srgb, var(--navy), black 60%));
   color: #fff;
   border-radius: 28px;
   padding: clamp(44px, 6vw, 86px);
@@ -358,12 +364,12 @@ h2 {
   transform: translateY(-1px);
 }
 .btn.primary {
-  background: #22558f;
-  color: white;
+  background: var(--blue);
+  color: var(--brand-primary-on, white);
   box-shadow: 0 5px 12px rgba(34, 85, 143, 0.13);
 }
 .btn.primary:not(:disabled):hover {
-  background: #173f72;
+  background: var(--blue-dark);
 }
 .btn.secondary {
   color: #345a80;
@@ -400,7 +406,7 @@ h2 {
   top: 0;
   bottom: 0;
   z-index: 30;
-  background: #102a49;
+  background: color-mix(in srgb, var(--navy), black 55%);
   color: #dce8f4;
   display: flex;
   flex-direction: column;
@@ -415,7 +421,7 @@ h2 {
 }
 .sidebar-brand .brand-mark {
   background: #fff;
-  color: #163d69;
+  color: color-mix(in srgb, var(--navy), black 65%);
 }
 .brand-title strong {
   font-family:
