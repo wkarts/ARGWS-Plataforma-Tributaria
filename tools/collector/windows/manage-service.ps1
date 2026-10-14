@@ -151,15 +151,15 @@ switch ($Action) {
     foreach ($entry in $entries.GetEnumerator()) {
       $node = $xml.CreateElement($entry.Key)
       $node.InnerText = [string]$entry.Value
-      [void]$xml.service.AppendChild($node)
+      [void]$xml.DocumentElement.AppendChild($node)
     }
     $log = $xml.CreateElement('log')
     $log.SetAttribute('mode', 'roll')
-    [void]$xml.service.AppendChild($log)
+    [void]$xml.DocumentElement.AppendChild($log)
     $failure = $xml.CreateElement('onfailure')
     $failure.SetAttribute('action', 'restart')
     $failure.SetAttribute('delay', '30 sec')
-    [void]$xml.service.AppendChild($failure)
+    [void]$xml.DocumentElement.AppendChild($failure)
     $xml.Save($serviceXml)
     if (-not (Get-InstalledService)) { Invoke-Wrapper 'install' }
     if ((Get-InstalledService).Status -ne 'Running') { Invoke-Wrapper 'start' }
