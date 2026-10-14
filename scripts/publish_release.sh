@@ -54,7 +54,8 @@ ref_sha() {
       object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object" --jq '.object.sha')"
     fi
     printf '%s' "$object"
-  elif grep -q '404' gh-error.txt; then
+  elif grep -Eq '(404|Not Found)' gh-error.txt || \
+       jq -e '.status == "404" or .status == 404' <<< "$result" >/dev/null 2>&1; then
     return 1
   else
     cat gh-error.txt >&2; return 2
