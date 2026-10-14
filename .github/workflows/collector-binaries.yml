@@ -1,0 +1,115 @@
+name: XML collector binaries
+on:
+  pull_request:
+    paths:
+      - 'tools/collector/**'
+      - 'VERSION'
+      - '.github/workflows/collector-binaries.yml'
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - name: Verify source and build Linux AMD64 binary
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          python scripts/version.py check
+          python -m unittest discover -s tools/collector -p 'test_*.py' -v
+          python -m unittest discover -s tools/collector/tests -p 'test_*.py' -v
+          python tools/collector/collector.py self-test --offline
+          python -m pip install -r tools/collector/requirements-build.txt
+          python -m PyInstaller --clean --noconfirm --onefile --console \
+            --name fiscal-xml-collector-linux-amd64 --distpath dist/collector \
+            --add-data 'VERSION:.' --hidden-import sefaz_nfe tools/collector/collector.py
+      - name: Smoke the standalone binary outside the checkout
+        run: |
+          set -euo pipefail
+          file dist/collector/fiscal-xml-collector-linux-amd64 | grep -E 'ELF 64-bit.*x86-64'
+          cd "$RUNNER_TEMP"
+          test "$("$GITHUB_WORKSPACE/dist/collector/fiscal-xml-collector-linux-amd64" --version)" = \
+            "fiscal-xml-collector $(cat "$GITHUB_WORKSPACE/VERSION")"
+          "$GITHUB_WORKSPACE/dist/collector/fiscal-xml-collector-linux-amd64" self-test --offline
+      - name: Write artifact checksum
+        run: |
+          set -euo pipefail
+          cd dist/collector
+          sha256sum fiscal-xml-collector-linux-amd64 > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fiscal-collector-linux-${{ github.sha }}
+          path: |
+            dist/collector/fiscal-xml-collector-linux-amd64
+            dist/collector/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - name: Verify source and build Windows AMD64 binary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne 'X64') { throw 'Expected Windows x64' }
+          python scripts/version.py check
+          if ($LASTEXITCODE -ne 0) { throw 'Version drift' }
+          python -m unittest discover -s tools/collector -p 'test_*.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'SEFAZ adapter tests failed' }
+          python -m unittest discover -s tools/collector/tests -p 'test_*.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Collector tests failed' }
+          python tools/collector/collector.py self-test --offline
+          if ($LASTEXITCODE -ne 0) { throw 'Source smoke failed' }
+          python -m pip install -r tools/collector/requirements-build.txt
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller install failed' }
+          python -m PyInstaller --clean --noconfirm --onefile --console `
+            --name fiscal-xml-collector-windows-amd64 --distpath dist/collector `
+            --add-data 'VERSION;.' --hidden-import sefaz_nfe tools/collector/collector.py
+          if ($LASTEXITCODE -ne 0) { throw 'Collector build failed' }
+      - name: Smoke the standalone binary outside the checkout and verify PE x64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $binary = (Resolve-Path 'dist/collector/fiscal-xml-collector-windows-amd64.exe').Path
+          $bytes = [IO.File]::ReadAllBytes($binary)
+          if ($bytes.Length -lt 512 -or $bytes[0] -ne 77 -or $bytes[1] -ne 90) { throw 'Invalid PE' }
+          $pe = [BitConverter]::ToInt32($bytes, 0x3c)
+          if ([BitConverter]::ToUInt16($bytes, $pe + 4) -ne 0x8664) { throw 'Not AMD64' }
+          Push-Location $env:RUNNER_TEMP
+          try {
+            $reportedVersion = & $binary --version
+            if ($LASTEXITCODE -ne 0) { throw 'Binary version smoke failed' }
+            if ($reportedVersion -ne "fiscal-xml-collector $((Get-Content "$env:GITHUB_WORKSPACE/VERSION" -Raw).Trim())") {
+              throw 'Embedded VERSION differs from canonical VERSION'
+            }
+            & $binary self-test --offline
+            if ($LASTEXITCODE -ne 0) { throw 'Binary offline self-test failed' }
+          } finally { Pop-Location }
+      - name: Write artifact checksum
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $file = 'fiscal-xml-collector-windows-amd64.exe'
+          $digest = (Get-FileHash -Algorithm SHA256 "dist/collector/$file").Hash.ToLowerInvariant()
+          "$digest  $file" | Set-Content -Encoding ascii dist/collector/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fiscal-collector-windows-${{ github.sha }}
+          path: |
+            dist/collector/fiscal-xml-collector-windows-amd64.exe
+            dist/collector/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30

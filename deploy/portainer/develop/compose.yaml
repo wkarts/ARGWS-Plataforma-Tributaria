@@ -1,0 +1,200 @@
+name: ${COMPOSE_PROJECT_NAME:?Defina COMPOSE_PROJECT_NAME}
+
+x-api-environment: &api-environment
+  APP_ENV: ${APP_ENV:-production}
+  SECRET_KEY: ${SECRET_KEY:?Defina SECRET_KEY}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: '5432'
+  POSTGRES_DB: ${POSTGRES_DB:-fiscal}
+  POSTGRES_USER: ${POSTGRES_USER:-fiscal}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD}
+  REDIS_HOST: redis
+  REDIS_PORT: '6379'
+  REDIS_PASSWORD: ${REDIS_PASSWORD:?Defina REDIS_PASSWORD}
+  RABBITMQ_HOST: rabbitmq
+  RABBITMQ_PORT: '5672'
+  RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-fiscal}
+  RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?Defina RABBITMQ_DEFAULT_PASS}
+  S3_ENDPOINT: ${S3_ENDPOINT:-objectstore:9000}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:?Defina S3_ACCESS_KEY}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:?Defina S3_SECRET_KEY}
+  S3_BUCKET: ${S3_BUCKET:-fiscal-evidence}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_USE_SSL: ${S3_USE_SSL:-false}
+  PROVIDER_MODE: ${PROVIDER_MODE:-fixture}
+  CBS_RESTRICTED_ENABLED: ${CBS_RESTRICTED_ENABLED:-false}
+  CBS_PRODUCTION_ENABLED: ${CBS_PRODUCTION_ENABLED:-false}
+  CBS_PAYMENTS_ENABLED: ${CBS_PAYMENTS_ENABLED:-false}
+  CBS_ALLOWED_BASES: ${CBS_ALLOWED_BASES:-}
+  CBS_CREDENTIAL_ORGANIZATION_ID: ${CBS_CREDENTIAL_ORGANIZATION_ID:-}
+  CBS_TOKEN_URL: ${CBS_TOKEN_URL:-}
+  CBS_CLIENT_ID: ${CBS_CLIENT_ID:-}
+  CBS_CLIENT_SECRET: ${CBS_CLIENT_SECRET:-}
+  CBS_WEBHOOK_BASE_URL: ${CBS_WEBHOOK_BASE_URL:-}
+  CBS_DOWNLOAD_HOSTS: ${CBS_DOWNLOAD_HOSTS:-storagegw.estaleiro.serpro.gov.br,api.receitafederal.gov.br}
+  CBS_MAX_DOWNLOAD_BYTES: ${CBS_MAX_DOWNLOAD_BYTES:-100000000}
+  CBS_AUTO_SYNC_ENABLED: ${CBS_AUTO_SYNC_ENABLED:-false}
+  CBS_AUTO_SYNC_ENVIRONMENT: ${CBS_AUTO_SYNC_ENVIRONMENT:-restricted}
+  CBS_AUTO_SYNC_RESOURCES: ${CBS_AUTO_SYNC_RESOURCES:-debitos,creditos}
+
+x-api-image: &api-image ghcr.io/${IMAGE_OWNER:-wkarts}/reforma-tributaria-api:${APP_TAG:?Defina APP_TAG}
+x-api-dependencies: &api-dependencies
+  postgres: {condition: service_healthy}
+  redis: {condition: service_healthy}
+  rabbitmq: {condition: service_healthy}
+  objectstore: {condition: service_healthy}
+
+services:
+  migrate:
+    image: *api-image
+    command: ["alembic", "upgrade", "head"]
+    environment: *api-environment
+    depends_on: *api-dependencies
+    restart: "no"
+    networks: [internal]
+    security_opt: ["no-new-privileges:true"]
+
+  bootstrap:
+    image: *api-image
+    command: ["python", "-m", "app.bootstrap"]
+    environment:
+      <<: *api-environment
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:?Defina BOOTSTRAP_ADMIN_EMAIL}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?Defina BOOTSTRAP_ADMIN_PASSWORD}
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    restart: "no"
+    networks: [internal]
+    security_opt: ["no-new-privileges:true"]
+
+  api:
+    image: *api-image
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers", "--no-access-log"]
+    environment: *api-environment
+    depends_on:
+      bootstrap: {condition: service_completed_successfully}
+    restart: unless-stopped
+    init: true
+    networks: [internal]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  worker:
+    image: *api-image
+    command: ["python", "-m", "app.worker"]
+    environment: *api-environment
+    depends_on:
+      bootstrap: {condition: service_completed_successfully}
+    restart: unless-stopped
+    init: true
+    networks: [internal]
+    security_opt: ["no-new-privileges:true"]
+
+  scheduler:
+    image: *api-image
+    command: ["python", "-m", "app.scheduler"]
+    environment: *api-environment
+    depends_on:
+      bootstrap: {condition: service_completed_successfully}
+    restart: unless-stopped
+    init: true
+    networks: [internal]
+    security_opt: ["no-new-privileges:true"]
+
+  web:
+    image: ghcr.io/${IMAGE_OWNER:-wkarts}/reforma-tributaria-web:${APP_TAG:?Defina APP_TAG}
+    depends_on:
+      api: {condition: service_healthy}
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+    ports:
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-48080}:8080"
+    networks: [internal]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  postgres:
+    image: ghcr.io/${IMAGE_OWNER:-wkarts}/reforma-tributaria-base-postgres:pg17-r1
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fiscal}
+      POSTGRES_USER: ${POSTGRES_USER:-fiscal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD}
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+    restart: unless-stopped
+    networks: [internal]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: ghcr.io/${IMAGE_OWNER:-wkarts}/reforma-tributaria-base-redis:redis7.4-r1
+    user: redis
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Defina REDIS_PASSWORD}
+    entrypoint: ["/bin/sh", "-ec"]
+    command: 'umask 077; printf "requirepass %s\n" "$$REDIS_PASSWORD" > /tmp/redis.conf; exec redis-server /tmp/redis.conf --appendonly yes'
+    volumes: ["redis_data:/data"]
+    restart: unless-stopped
+    networks: [internal]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: ghcr.io/${IMAGE_OWNER:-wkarts}/reforma-tributaria-base-rabbitmq:rabbit4.1-r1
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-fiscal}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?Defina RABBITMQ_DEFAULT_PASS}
+    volumes: ["rabbitmq_data:/var/lib/rabbitmq"]
+    restart: unless-stopped
+    networks: [internal]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+
+  objectstore:
+    image: ghcr.io/${IMAGE_OWNER:-wkarts}/reforma-tributaria-base-objectstore:rustfs1.0.1-r1
+    command: ["/data"]
+    environment:
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:?Defina S3_ACCESS_KEY}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:?Defina S3_SECRET_KEY}
+      RUSTFS_ADDRESS: ':9000'
+      RUSTFS_CONSOLE_ENABLE: 'false'
+    volumes: ["objectstore_data:/data"]
+    restart: unless-stopped
+    networks: [internal]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  objectstore_data:

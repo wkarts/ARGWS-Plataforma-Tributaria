@@ -1,0 +1,95 @@
+name: CI
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  infrastructure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - name: Validate version, deploy matrix and Compose semantics
+        run: |
+          python3 scripts/version.py check
+          python3 scripts/validate_deploys.py --docker
+          python3 -m compileall -q scripts tools/deployer
+          python3 -m unittest discover -s scripts -p 'test_*.py' -v
+          python3 -m unittest discover -s tools/deployer -p 'test_*.py' -v
+          bash -n scripts/*.sh
+      - name: Validate image names, base manifest and protected cleanup policy
+        run: python3 scripts/validate_release.py
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: fiscal_ci
+          POSTGRES_USER: fiscal_ci
+          POSTGRES_PASSWORD: fiscal_ci_ephemeral
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U fiscal_ci -d fiscal_ci"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_DB: fiscal_ci
+      POSTGRES_USER: fiscal_ci
+      POSTGRES_PASSWORD: fiscal_ci_ephemeral
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - name: Install backend and test dependencies
+        working-directory: apps/api
+        run: python -m pip install -e '.[test]'
+      - name: Test API, worker, scheduler and contracts
+        working-directory: apps/api
+        run: python -m pytest -q
+      - name: Apply and compare migrations on PostgreSQL
+        working-directory: apps/api
+        run: |
+          alembic upgrade head
+          alembic check
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Install, test and build web application
+        working-directory: apps/web
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+          npm run build
+  containers:
+    needs: [infrastructure, backend, frontend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: docker/setup-buildx-action@v3
+      - name: Build local API and web images without GHCR
+        run: |
+          docker buildx build --platform linux/amd64 -f infra/docker/api.Dockerfile \
+            --build-arg PYTHON_BASE=python:3.13-slim-bookworm --build-arg APP_VERSION="$(cat VERSION)" .
+          docker buildx build --platform linux/amd64 -f infra/docker/web.Dockerfile \
+            --build-arg NODE_BASE=node:22-alpine --build-arg NGINX_BASE=nginx:1.30-alpine \
+            --build-arg APP_VERSION="$(cat VERSION)" .

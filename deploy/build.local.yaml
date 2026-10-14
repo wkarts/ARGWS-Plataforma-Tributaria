@@ -1,0 +1,43 @@
+# Override somente para desenvolvimento local; primeira -f deve ser deploy/compose.yaml.
+services:
+  api:
+    image: reforma-tributaria-api:local
+    pull_policy: never
+    build:
+      context: ..
+      dockerfile: infra/docker/api.Dockerfile
+      args:
+        PYTHON_BASE: python:3.13-slim-bookworm
+        APP_VERSION: local
+        BUILD_SHA: local
+  migrate:
+    image: reforma-tributaria-api:local
+    pull_policy: never
+  bootstrap:
+    image: reforma-tributaria-api:local
+    pull_policy: never
+  worker:
+    image: reforma-tributaria-api:local
+    pull_policy: never
+  scheduler:
+    image: reforma-tributaria-api:local
+    pull_policy: never
+  web:
+    image: reforma-tributaria-web:local
+    pull_policy: never
+    build:
+      context: ..
+      dockerfile: infra/docker/web.Dockerfile
+      args:
+        NODE_BASE: node:22-alpine
+        NGINX_BASE: nginx:1.30-alpine
+        APP_VERSION: local
+        BUILD_SHA: local
+  postgres:
+    image: postgres:17-alpine
+  redis:
+    image: redis:7.4-alpine
+  rabbitmq:
+    image: rabbitmq:4.1-management-alpine
+  objectstore:
+    image: rustfs/rustfs:1.0.1

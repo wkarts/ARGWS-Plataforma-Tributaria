@@ -1,0 +1,23 @@
+{
+  "name": "reforma-tributaria-console",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "node --test src/*.test.ts"
+  },
+  "dependencies": {
+    "vue": "3.5.21"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.2",
+    "@vitejs/plugin-vue": "6.0.1",
+    "typescript": "5.9.2",
+    "vite": "7.1.5",
+    "vue-tsc": "3.0.6"
+  }
+}

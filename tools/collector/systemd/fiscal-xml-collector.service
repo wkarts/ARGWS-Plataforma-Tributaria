@@ -1,0 +1,24 @@
+[Unit]
+Description=Reforma Tributaria - Coletor local de XML fiscal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fiscal-collector
+Group=fiscal-collector
+StateDirectory=fiscal-xml-collector
+StateDirectoryMode=0700
+LoadCredential=agent-token:/etc/fiscal-xml-collector/agent-token
+Environment=FISCAL_COLLECTOR_TOKEN_FILE=%d/agent-token
+ExecStart=/opt/fiscal-xml-collector/fiscal-xml-collector-linux-amd64 serve --config /etc/fiscal-xml-collector/config.json
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/fiscal-xml-collector
+
+[Install]
+WantedBy=multi-user.target

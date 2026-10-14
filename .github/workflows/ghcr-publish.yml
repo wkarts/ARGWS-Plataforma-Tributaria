@@ -1,0 +1,225 @@
+name: GHCR publish and release
+on:
+  push:
+    branches: [develop, main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: fiscal-publish-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+    permissions: {contents: read}
+  source:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions: {contents: read}
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      channel: ${{ steps.metadata.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0, persist-credentials: false}
+      - id: metadata
+        name: Enforce stable VERSION and canonical Git tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 scripts/version.py check
+          version="$(python3 scripts/version.py current)"
+          channel="$GITHUB_REF_NAME"
+          [[ "$channel" == develop || "$channel" == main ]] || { echo 'Only develop/main can publish'; exit 1; }
+          if [[ "$channel" == main ]]; then
+            if tag_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$version" 2>/dev/null)"; then
+              existing="$(jq -r '.object.sha' <<< "$tag_json")"
+              if [[ "$(jq -r '.object.type' <<< "$tag_json")" == tag ]]; then
+                existing="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$existing" --jq '.object.sha')"
+              fi
+              [[ "$existing" == "$GITHUB_SHA" ]] || { echo 'Published SemVer tag belongs to another commit'; exit 1; }
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+  bases:
+    needs: source
+    uses: ./.github/workflows/ghcr-bases.yml
+    permissions: {contents: read, packages: write}
+  deployer:
+    needs: verify
+    uses: ./.github/workflows/deployer-windows.yml
+    permissions: {contents: read}
+  collector:
+    needs: verify
+    uses: ./.github/workflows/collector-binaries.yml
+    permissions: {contents: read}
+  images:
+    needs: [source, bases]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions: {contents: read, packages: write, attestations: write, id-token: write}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {part: api, dockerfile: infra/docker/api.Dockerfile}
+          - {part: web, dockerfile: infra/docker/web.Dockerfile}
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: sha
+        env:
+          PART: ${{ matrix.part }}
+        run: |
+          echo "tag=sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/reforma-tributaria-$PART" >> "$GITHUB_OUTPUT"
+      - id: existing
+        name: Preserve an existing SHA image on retries
+        env:
+          PART: ${{ matrix.part }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/reforma-tributaria-$PART:sha-${GITHUB_SHA::12}"
+          if docker buildx imagetools inspect "$image" >/dev/null 2>inspect-error.txt; then
+            echo 'build=false' >> "$GITHUB_OUTPUT"
+          elif grep -Eiq '(not found|manifest unknown|NAME_UNKNOWN|404)' inspect-error.txt; then
+            echo 'build=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'Registry check failed; refusing to overwrite SHA tag.' >&2; exit 1
+          fi
+      - id: publish
+        uses: docker/build-push-action@v6
+        if: steps.existing.outputs.build == 'true'
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.sha.outputs.image }}:${{ steps.sha.outputs.tag }}
+          build-args: |
+            APP_VERSION=${{ needs.source.outputs.version }}
+            BUILD_SHA=${{ github.sha }}
+          cache-from: type=gha,scope=fiscal-${{ matrix.part }}
+          cache-to: type=gha,mode=max,scope=fiscal-${{ matrix.part }}
+      - uses: actions/attest-build-provenance@v2
+        if: steps.existing.outputs.build == 'true'
+        with:
+          subject-name: ${{ steps.sha.outputs.image }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
+  release:
+    needs: [source, images, deployer, collector]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions: {contents: write, packages: write}
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - uses: actions/download-artifact@v4
+        with:
+          name: fiscal-deployer-${{ github.sha }}
+          path: release-deployer
+      - uses: actions/download-artifact@v4
+        with:
+          name: fiscal-collector-linux-${{ github.sha }}
+          path: release-collector-linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: fiscal-collector-windows-${{ github.sha }}
+          path: release-collector-windows
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify all images and record immutable digests
+        env:
+          VERSION: ${{ needs.source.outputs.version }}
+          CHANNEL: ${{ needs.source.outputs.channel }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-files
+          : > release-files/IMAGES.txt
+          : > release-files/BASE-IMAGES.txt
+          inspect_digest() {
+            local reference="$1" attempt output digest
+            for attempt in {1..15}; do
+              if output="$(docker buildx imagetools inspect "$reference" 2>&1)"; then
+                digest="$(awk '$1=="Digest:"{print $2;exit}' <<< "$output")"
+                if [[ "$digest" == sha256:* ]]; then printf '%s' "$digest"; return 0; fi
+              fi
+              sleep 4
+            done
+            echo "Missing GHCR image $reference: $output" >&2; return 1
+          }
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          for part in api web; do
+            image="ghcr.io/$owner/reforma-tributaria-$part"
+            digest="$(inspect_digest "$image:sha-${GITHUB_SHA::12}")"
+            echo "$image@$digest" >> release-files/IMAGES.txt
+          done
+          python3 - <<'PY' > /tmp/fiscal-base-refs.txt
+          import json,os
+          owner=os.environ['GITHUB_REPOSITORY_OWNER'].lower()
+          for item in json.load(open('.github/base-images.json'))['bases']:
+              print(f"ghcr.io/{owner}/{item['package']}:{item['tag']}")
+          PY
+          while IFS= read -r reference; do
+            echo "$reference@$(inspect_digest "$reference")" >> release-files/BASE-IMAGES.txt
+          done < /tmp/fiscal-base-refs.txt
+          api_ref="$(head -n1 release-files/IMAGES.txt)"
+          docker run --rm --platform linux/amd64 --entrypoint python "$api_ref" -m pip freeze > release-files/API-DEPENDENCIES.txt
+      - name: Verify collector binaries and package release assets with SHA-256
+        env:
+          CHANNEL: ${{ needs.source.outputs.channel }}
+          VERSION: ${{ needs.source.outputs.version }}
+        run: |
+          set -euo pipefail
+          (cd release-deployer && sha256sum -c SHA256SUMS.txt)
+          python3 scripts/verify_collector_assets.py release-collector-linux release-collector-windows
+          cp release-deployer/*.exe release-files/
+          cp release-deployer/Reforma-Tributaria-Deployer-GUI-Windows-x64.zip release-files/
+          cp release-deployer/README-Deployer.md release-files/
+          cp release-collector-linux/fiscal-xml-collector-linux-amd64 release-files/
+          cp release-collector-windows/fiscal-xml-collector-windows-amd64.exe release-files/
+          cp tools/collector/README.md release-files/README-XML-Collector.md
+          cp docs/COLETOR-LOCAL-OPERACAO.md release-files/OPERACAO-XML-Collector.md
+          cp docs/CONTRATOS-OFICIAIS-2026.md release-files/CONTRATOS-OFICIAIS-2026.md
+          cp tools/collector/systemd/fiscal-xml-collector.service release-files/
+          cp tools/collector/systemd/install.sh release-files/install-fiscal-xml-collector-systemd.sh
+          cp tools/collector/systemd/uninstall.sh release-files/uninstall-fiscal-xml-collector-systemd.sh
+          cp tools/collector/windows/install-winsw.ps1 release-files/install-fiscal-xml-collector-winsw.ps1
+          cp tools/collector/windows/uninstall-winsw.ps1 release-files/uninstall-fiscal-xml-collector-winsw.ps1
+          if find deploy -type f -name '.env' -print -quit | grep -q .; then
+            echo 'Private .env in source; refusing release' >&2; exit 1
+          fi
+          label="$VERSION"
+          [[ "$CHANNEL" == develop ]] && label=develop
+          zip -q -r "release-files/Reforma-Tributaria-deploy-$label.zip" deploy scripts infra/docker/nginx.conf VERSION \
+            -x '*/.env' '*/backups/*' '*/volumes/*'
+          {
+            echo "Version=$VERSION"
+            echo "Channel=$CHANNEL"
+            echo "Commit=$GITHUB_SHA"
+            echo 'Use IMAGES.txt and BASE-IMAGES.txt for immutable registry digests.'
+          } > release-files/BUILD-INFO.txt
+          (cd release-files && sha256sum -- * > SHA256SUMS.txt)
+      - name: Promote verified tags and publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.source.outputs.version }}
+          CHANNEL: ${{ needs.source.outputs.channel }}
+        run: |
+          bash scripts/publish_release.sh release-files
