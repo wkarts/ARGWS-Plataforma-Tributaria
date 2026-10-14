@@ -47,8 +47,9 @@ done
 ref_sha() {
   local tag="$1" result kind object
   if result="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" 2>gh-error.txt)"; then
-    kind="$(jq -r '.object.type' <<< "$result")"
-    object="$(jq -r '.object.sha' <<< "$result")"
+    kind="$(jq -r 'if type == "object" then (.object.type // empty) else empty end' <<< "$result")"
+    object="$(jq -r 'if type == "object" then (.object.sha // empty) else empty end' <<< "$result")"
+    [[ -n "$object" ]] || return 1
     if [[ "$kind" == tag ]]; then
       object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object" --jq '.object.sha')"
     fi

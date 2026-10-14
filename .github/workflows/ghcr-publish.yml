@@ -7,7 +7,7 @@ permissions:
   contents: read
 concurrency:
   group: fiscal-publish-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.ref == 'refs/heads/develop' }}
 jobs:
   verify:
     uses: ./.github/workflows/ci.yml
@@ -34,11 +34,13 @@ jobs:
           [[ "$channel" == develop || "$channel" == main ]] || { echo 'Only develop/main can publish'; exit 1; }
           if [[ "$channel" == main ]]; then
             if tag_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$version" 2>/dev/null)"; then
-              existing="$(jq -r '.object.sha' <<< "$tag_json")"
-              if [[ "$(jq -r '.object.type' <<< "$tag_json")" == tag ]]; then
-                existing="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$existing" --jq '.object.sha')"
+              existing="$(jq -r 'if type == "object" then (.object.sha // empty) else empty end' <<< "$tag_json")"
+              if [[ -n "$existing" ]]; then
+                if [[ "$(jq -r '.object.type // empty' <<< "$tag_json")" == tag ]]; then
+                  existing="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$existing" --jq '.object.sha')"
+                fi
+                [[ "$existing" == "$GITHUB_SHA" ]] || { echo 'Published SemVer tag belongs to another commit'; exit 1; }
               fi
-              [[ "$existing" == "$GITHUB_SHA" ]] || { echo 'Published SemVer tag belongs to another commit'; exit 1; }
             fi
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -58,7 +60,7 @@ jobs:
           tag="internal-build-$GITHUB_SHA"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           ref="repos/$GITHUB_REPOSITORY/git/ref/tags/$tag"
-          existing="$(gh api "$ref" --jq '.object.sha // empty' 2>/dev/null || true)"
+          existing="$(gh api "$ref" --jq 'if type == "object" then (.object.sha // empty) else empty end' 2>/dev/null || true)"
           if [[ -z "$existing" ]]; then
             gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
               -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA" >/dev/null
