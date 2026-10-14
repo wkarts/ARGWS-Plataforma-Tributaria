@@ -80,14 +80,26 @@ end;
 procedure RunManager(const ActionName: String);
 var
   ExitCode: Integer;
+  I: Integer;
   Params: String;
+  Output: TExecOutput;
+  Started: Boolean;
 begin
   Params := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
     ExpandConstant('{app}\manage-service.ps1') + '" -Action ' + ActionName +
     ' -Home "' + ExpandConstant('{commonappdata}\FiscalXmlCollector') + '"';
-  if (not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-    Params, '', SW_HIDE, ewWaitUntilTerminated, ExitCode)) or (ExitCode <> 0) then begin
+  ExitCode := -1;
+  Started := ExecAndCaptureOutput(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    Params, '', SW_SHOWNORMAL, ewWaitUntilTerminated, ExitCode, Output);
+  if (not Started) or (ExitCode <> 0) then begin
     Log('A operação ' + ActionName + ' do serviço retornou código ' + IntToStr(ExitCode));
+    { Protect receives paths only. Log a bounded stderr on failure to diagnose
+      UAC, filesystem and PowerShell errors without logging worker/profile output. }
+    if Started and (ActionName = 'Protect') then
+      for I := 0 to GetArrayLength(Output.StdErr) - 1 do begin
+        if I >= 12 then break;
+        Log('Protect stderr: ' + Copy(Output.StdErr[I], 1, 300));
+      end;
     RaiseException('A operação ' + ActionName + ' do serviço falhou. Verifique o registro da instalação.');
   end;
 end;
