@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.reconciliation import reconcile
+from app.reconciliation import assisted_preview, reconcile
 from app.models import FiscalDocument, Record
 
 
@@ -163,3 +163,54 @@ def test_float_never_masquerades_as_exact_fiscal_decimal():
     result = run([bad], [document(amount="0.10")])
     assert result["items"][0]["status"] == "unknown"
     assert result["items"][0]["official_amount"] is None
+
+
+def test_assisted_preview_separates_cbs_ibs_models_and_directions_without_net_balance():
+    docs = [
+        document(id="nfe", model="55", kind="nfe", amount="1.25", ibs_amount=Decimal("0.15"),
+                 signature_present=True, authorization_status="reported_authorized"),
+        document(id="nfce", key=OTHER, digest="nfce-hash", model="65", kind="nfce",
+                 amount="2.10", ibs_amount=Decimal("0.20"), signature_present=True,
+                 authorization_status="reported_authorized"),
+        document(id="cte", key="3" * 44, digest="cte-hash", model="57", kind="cte",
+                 direction="incoming", amount="0.90", ibs_amount=Decimal("0.08"),
+                 signature_present=True, authorization_status="reported_authorized"),
+    ]
+    result = assisted_preview([], docs, organization_id="org-a", company_id="company-a",
+                              period="2026-10")
+    assert result["status"] == "preliminary_unvalidated"
+    assert result["coverage"]["official_cbs_complete"] is False
+    assert result["coverage"]["signature_cryptographically_verified"] is False
+    assert {(x["tax"], x["direction"], x["model"]): x["amount"] for x in result["totals"]} == {
+        ("CBS", "outgoing", "55"): "1.25", ("CBS", "outgoing", "65"): "2.10",
+        ("CBS", "incoming", "57"): "0.90", ("IBS", "outgoing", "55"): "0.15",
+        ("IBS", "outgoing", "65"): "0.20", ("IBS", "incoming", "57"): "0.08",
+    }
+    assert "payable" not in result and "credit" not in result
+    assert all(item["document_ids"] for item in result["items"])
+
+
+def test_assisted_preview_excludes_ambiguous_event_unsigned_and_protocol_only_claims():
+    docs = [
+        document(id="duplicate-a", digest="sha-a", model="55", kind="nfe", signature_present=True,
+                 authorization_status="reported_authorized"),
+        document(id="duplicate-b", digest="sha-b", model="55", kind="nfe", signature_present=True,
+                 authorization_status="reported_authorized"),
+        document(id="event", key=OTHER, kind="nfe", model=None, digest="event-hash"),
+        document(id="unsigned", key="3" * 44, digest="unsigned-hash", model="55", kind="nfe",
+                 signature_present=False, authorization_status="reported_authorized"),
+        document(id="no-protocol", key="4" * 44, digest="no-protocol-hash", model="55", kind="nfe",
+                 signature_present=True, authorization_status="not_provided"),
+    ]
+    result = assisted_preview([], docs, organization_id="org-a", company_id="company-a",
+                              period="2026-10")
+    assert result["totals"] == []
+    codes = {issue["code"] for issue in result["issues"]}
+    assert {"multiple_local_documents", "unsupported_model_or_event", "signature_element_absent",
+            "authorization_protocol_not_reported"}.issubset(codes)
+
+
+def test_reconciliation_accepts_alphanumeric_key_as_identifier_only():
+    key = KEY[:8] + "A" + KEY[9:]
+    result = run([record(key=key)], [document(key=key)])
+    assert result["summary"]["match"] == 1

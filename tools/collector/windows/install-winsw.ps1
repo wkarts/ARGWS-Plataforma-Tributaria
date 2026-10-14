@@ -83,7 +83,7 @@ $service = $xml.CreateElement('service')
 $xml.AppendChild($service) | Out-Null
 $values = [ordered]@{
   id = $ServiceId; name = 'Coletor local de XML fiscal';
-  description = 'Envio seguro de XML fiscal assinado para a plataforma Reforma Tributaria';
+  description = 'Envio seguro de XML fiscal assinado para a aplicação configurada pelo cliente';
   executable = $installedCollector;
   arguments = ('serve --config "{0}"' -f $installedConfig);
   startmode = 'Automatic';

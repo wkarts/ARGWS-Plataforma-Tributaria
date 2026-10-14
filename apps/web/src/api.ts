@@ -1,4 +1,5 @@
 import type {
+  AssistedPreview,
   Capabilities,
   CommercialInstallment,
   Company,
@@ -7,6 +8,8 @@ import type {
   FiscalDocument,
   FiscalRecord,
   IssuedAgent,
+  InstallationBrand,
+  InstallationBrandInput,
   ListResponse,
   LocalAgent,
   Query,
@@ -18,12 +21,12 @@ import type {
 
 declare global {
   interface Window {
-    __RT_APP_CONFIG__?: { apiBaseUrl?: string };
+    __APP_CONFIG__?: { apiBaseUrl?: string };
   }
 }
 
 const configuredBase =
-  window.__RT_APP_CONFIG__?.apiBaseUrl ||
+  window.__APP_CONFIG__?.apiBaseUrl ||
   import.meta.env.VITE_API_BASE_URL ||
   "/api/v1";
 const base = configuredBase.replace(/\/+$/, "");
@@ -73,7 +76,8 @@ export class ApiClient {
     try {
       const headers = new Headers(options.headers);
       headers.set("Accept", "application/json");
-      if (options.body) headers.set("Content-Type", "application/json");
+      if (options.body && !(options.body instanceof FormData))
+        headers.set("Content-Type", "application/json");
       if (authenticated && this.token())
         headers.set("Authorization", `Bearer ${this.token()}`);
       const response = await fetch(`${base}${path}`, {
@@ -124,6 +128,15 @@ export class ApiClient {
 
   me() {
     return this.request<User>("/auth/me");
+  }
+  installationBrand() {
+    return this.request<InstallationBrand>("/installation/branding", {}, false);
+  }
+  saveInstallationBrand(payload: InstallationBrandInput, logo?: File | null) {
+    const form = new FormData();
+    form.set("payload", JSON.stringify(payload));
+    if (logo) form.set("logo", logo);
+    return this.request<InstallationBrand>("/installation/branding", { method: "PUT", body: form });
   }
   capabilities() {
     return this.request<Capabilities>("/capabilities");
@@ -223,6 +236,11 @@ export class ApiClient {
   reconciliation(companyId: string, period: string) {
     const params = new URLSearchParams({ company_id: companyId, period });
     return this.request<Reconciliation>(`/reconciliation?${params.toString()}`);
+  }
+
+  assistedPreview(companyId: string, period: string) {
+    const params = new URLSearchParams({ company_id: companyId, period });
+    return this.request<AssistedPreview>(`/assisted-preview?${params.toString()}`);
   }
 
   stockCreditClaims(companyId: string, cursor?: string) {

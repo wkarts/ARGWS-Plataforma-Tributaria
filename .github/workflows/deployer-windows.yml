@@ -30,51 +30,57 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Invalid deploys' }
           python -m unittest discover -s tools/deployer -p 'test_*.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'Deployer tests failed' }
-      - name: Build CLI and GUI executable
+      - name: Build internal worker and graphical deployer
         shell: pwsh
         run: |
           python -m pip install -r tools/deployer/requirements-build.txt
           if ($LASTEXITCODE -ne 0) { throw 'PyInstaller install failed' }
           python -m PyInstaller --clean --noconfirm --onefile --console `
-            --name reforma-tributaria-deployer-win-x64 --distpath dist `
+            --name fiscal-deployer-worker-win-x64 --distpath dist `
             --add-data 'deploy;deploy' --add-data 'VERSION;.' `
             tools/deployer/deployer.py
           if ($LASTEXITCODE -ne 0) { throw 'CLI build failed' }
           python -m PyInstaller --clean --noconfirm --onefile --windowed `
-            --name reforma-tributaria-deployer-gui-win-x64 --distpath dist `
+            --name fiscal-deployer-gui-win-x64 --distpath dist `
             tools/deployer/gui.py
           if ($LASTEXITCODE -ne 0) { throw 'GUI build failed' }
-      - name: Smoke both binaries and verify PE x64
+      - name: Smoke the GUI and its internal worker; verify PE x64
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          foreach ($filename in @('reforma-tributaria-deployer-win-x64.exe', 'reforma-tributaria-deployer-gui-win-x64.exe')) {
+          foreach ($filename in @('fiscal-deployer-worker-win-x64.exe', 'fiscal-deployer-gui-win-x64.exe')) {
             $path = (Resolve-Path "dist/$filename").Path
             $bytes = [IO.File]::ReadAllBytes($path)
             if ($bytes.Length -lt 512 -or $bytes[0] -ne 77 -or $bytes[1] -ne 90) { throw "Invalid PE: $filename" }
             $pe = [BitConverter]::ToInt32($bytes, 0x3c)
             if ([BitConverter]::ToUInt16($bytes, $pe + 4) -ne 0x8664) { throw "Not AMD64: $filename" }
           }
-          $cli = (Resolve-Path 'dist/reforma-tributaria-deployer-win-x64.exe').Path
+          $cli = (Resolve-Path 'dist/fiscal-deployer-worker-win-x64.exe').Path
           & $cli version
           if ($LASTEXITCODE -ne 0) { throw 'CLI version smoke failed' }
           & $cli list
           if ($LASTEXITCODE -ne 0) { throw 'CLI list smoke failed' }
-          $output = Join-Path $env:RUNNER_TEMP 'reforma-deployer-smoke'
-          & $cli generate --target docker --channel production --output $output --admin-email admin@example.org
+          $output = Join-Path $env:RUNNER_TEMP 'fiscal-deployer-smoke'
+          & $cli generate --target docker --channel production --owner $env:GITHUB_REPOSITORY_OWNER --output $output --admin-email admin@example.org
           if ($LASTEXITCODE -ne 0) { throw 'CLI generate smoke failed' }
           & $cli validate --directory $output
           if ($LASTEXITCODE -ne 0) { throw 'CLI validate smoke failed' }
-          $gui = Start-Process -FilePath (Resolve-Path 'dist/reforma-tributaria-deployer-gui-win-x64.exe').Path -ArgumentList '--smoke-test' -PassThru -Wait
+          $gui = Start-Process -FilePath (Resolve-Path 'dist/fiscal-deployer-gui-win-x64.exe').Path -ArgumentList '--smoke-test' -PassThru -Wait
           if ($gui.ExitCode -ne 0) { throw 'GUI smoke failed' }
-      - name: Package EXEs and checksums
+      - name: Package graphical deployer with its internal worker
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist/release | Out-Null
-          Copy-Item dist/*-win-x64.exe dist/release/
+          New-Item -ItemType Directory -Force dist/bundle,dist/release | Out-Null
+          Copy-Item dist/*-win-x64.exe dist/bundle/
+          Copy-Item tools/deployer/README.md dist/bundle/README-Deployer.md
+          $inner = foreach ($file in (Get-ChildItem dist/bundle -File | Sort-Object Name)) {
+            $sha = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
+            "$sha  $($file.Name)"
+          }
+          $inner | Set-Content -Encoding ascii dist/bundle/SHA256SUMS.txt
           Copy-Item tools/deployer/README.md dist/release/README-Deployer.md
-          Compress-Archive -CompressionLevel Optimal -Path dist/release/*.exe,dist/release/README-Deployer.md `
-            -DestinationPath dist/release/Reforma-Tributaria-Deployer-GUI-Windows-x64.zip
+          Compress-Archive -CompressionLevel Optimal -Path dist/bundle/* `
+            -DestinationPath dist/release/Fiscal-Deployer-GUI-Windows-x64.zip
           $lines = foreach ($file in (Get-ChildItem dist/release -File | Sort-Object Name)) {
             $sha = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
             "$sha  $($file.Name)"
@@ -90,9 +96,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Copy-Item dist/release/SHA256SUMS.txt dist/release/SHA256SUMS-deployer.txt
           gh release upload $env:STAGING_TAG `
-            dist/release/reforma-tributaria-deployer-win-x64.exe `
-            dist/release/reforma-tributaria-deployer-gui-win-x64.exe `
-            dist/release/Reforma-Tributaria-Deployer-GUI-Windows-x64.zip `
+            dist/release/Fiscal-Deployer-GUI-Windows-x64.zip `
             dist/release/README-Deployer.md `
             dist/release/SHA256SUMS-deployer.txt `
             --clobber --repo $env:GITHUB_REPOSITORY

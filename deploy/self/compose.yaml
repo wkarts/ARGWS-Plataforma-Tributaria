@@ -1,0 +1,82 @@
+name: ${COMPOSE_PROJECT_NAME:?Configure COMPOSE_PROJECT_NAME}
+
+x-api-environment: &api-environment
+  DEPLOYMENT_MODE: self
+  SELF_DATA_DIR: /data
+  PROVIDER_MODE: disabled
+  SECRET_KEY_FILE: /run/secrets/signing_key
+  BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+  BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/bootstrap_password
+
+x-api-secrets: &api-secrets [signing_key, bootstrap_password]
+x-api-volume: &api-volume [fiscal_data:/data]
+x-api-tmpfs: &api-tmpfs ["/run/app-secrets:rw,noexec,nosuid,size=64k,mode=0700"]
+x-api-build: &api-build
+  context: ../..
+  dockerfile: deploy/self/api.Dockerfile
+
+services:
+  setup:
+    build: *api-build
+    image: ${API_IMAGE:-client-fiscal-api:local}
+    command: ["python", "-m", "app.self_setup"]
+    environment: *api-environment
+    secrets: *api-secrets
+    volumes: *api-volume
+    tmpfs: *api-tmpfs
+    restart: "no"
+    networks: [internal]
+    security_opt: ["no-new-privileges:true"]
+
+  api:
+    build: *api-build
+    image: ${API_IMAGE:-client-fiscal-api:local}
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers", "--no-access-log", "--workers", "1"]
+    environment: *api-environment
+    secrets: *api-secrets
+    volumes: *api-volume
+    tmpfs: *api-tmpfs
+    depends_on:
+      setup: {condition: service_completed_successfully}
+    restart: unless-stopped
+    init: true
+    networks: [internal]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/self/web.Dockerfile
+    image: ${WEB_IMAGE:-client-fiscal-web:local}
+    depends_on:
+      api: {condition: service_healthy}
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+    ports:
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-48080}:8080"
+    networks: [internal]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  internal: {driver: bridge}
+
+volumes:
+  fiscal_data:
+
+secrets:
+  signing_key:
+    file: ./secrets/signing-key
+  bootstrap_password:
+    file: ./secrets/admin-password

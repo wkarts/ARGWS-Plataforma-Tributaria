@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare, inspect and operate an isolated Reforma Tributaria Compose stack.
+"""Prepare, inspect and operate an isolated fiscal Compose stack.
 
 This file deliberately uses only the Python standard library so the same CLI
 can run from source or be bundled alongside the desktop GUI on Windows.
@@ -237,7 +237,7 @@ def ensure_directory(directory: Path) -> None:
             raise DeployerError(f"{filename} deve ser um arquivo comum.")
 
 
-def generate(*, target: str, channel: str, output: Path, owner: str = "wkarts",
+def generate(*, target: str, channel: str, output: Path, owner: str,
              tag: str | None = None, bind: str | None = None, port: int | None = None,
              admin_email: str, force: bool = False) -> dict:
     templates = template_path(target, channel)
@@ -554,7 +554,7 @@ def export_zip(directory: Path, output: Path) -> dict:
 
 
 def make_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="reforma-tributaria-deployer", description="Gerador e operador local de stacks Compose")
+    parser = argparse.ArgumentParser(prog="fiscal-deployer", description="Gerador e operador local de stacks Compose")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("version", help="Ler somente o arquivo VERSION do projeto")
     commands.add_parser("list", help="Listar alvos e canais")
@@ -562,7 +562,7 @@ def make_parser() -> argparse.ArgumentParser:
         item = commands.add_parser(name)
         item.add_argument("--target", choices=TARGETS, required=True)
         item.add_argument("--channel", choices=CHANNELS, required=True)
-        item.add_argument("--owner", default="wkarts")
+        item.add_argument("--owner", required=True, help="Namespace GHCR das imagens da implantação")
         item.add_argument("--tag")
         item.add_argument("--bind")
         item.add_argument("--port", type=int)

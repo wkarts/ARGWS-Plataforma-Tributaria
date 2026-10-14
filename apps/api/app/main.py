@@ -7,6 +7,7 @@ from hashlib import sha256
 from importlib.metadata import version
 import hmac
 import json
+import time
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query as QueryParam, Request, Response
 from fastapi.responses import Response as RawResponse
@@ -24,6 +25,7 @@ from app.storage import BlobStore
 from app.documents import router as documents_router
 from app.reconciliation_api import router as reconciliation_router
 from app.finance_controls import router as finance_controls_router
+from app.branding import router as branding_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -31,15 +33,24 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Reforma Tributária • Integração CBS",
-              version=version("reforma-tributaria-api"), lifespan=lifespan)
+app = FastAPI(title="Plataforma Fiscal",
+              version=version("fiscal-assist-api"), lifespan=lifespan)
 app.include_router(documents_router)
 app.include_router(reconciliation_router)
 app.include_router(finance_controls_router)
+app.include_router(branding_router)
 
 
 def capabilities() -> dict:
     s = get_settings()
+    if s.self_hosted or s.provider_mode == "disabled":
+        return {
+            "provider_mode": "disabled", "environments": [],
+            "resources": {name: {"enabled": False,
+                "reason": "Integração CBS ainda não homologada neste modo"}
+                for name in ("debitos", "creditos", "pagamentos", "recolhimentos")},
+            "ibs": {"enabled": False, "reason": "Contrato IBS separado, ainda não homologado"},
+        }
     real = s.provider_mode == "receita"
     environments = ["fixture"] if not real else (["restricted"] if s.cbs_restricted_enabled else []) + (["production"] if s.cbs_production_enabled else [])
     return {
@@ -82,7 +93,33 @@ def redis_client() -> Redis:
     return Redis(host=s.redis_host, port=6379, password=s.redis_password or None, socket_connect_timeout=2, decode_responses=True)
 
 
-async def throttle_login(username: str) -> None:
+async def throttle_login(username: str, session: AsyncSession) -> None:
+    if get_settings().self_hosted:
+        timestamp = int(time.time())
+        try:
+            # SQLite commits the cleanup and attempt atomically. Each username
+            # has a fifteen-minute window that survives service restarts.
+            await session.execute(text("DELETE FROM auth_attempts WHERE window_end < :cutoff"),
+                                  {"cutoff": timestamp - 3600})
+            result = await session.execute(text("""
+                INSERT INTO auth_attempts (username_hash, attempts, window_end)
+                VALUES (:username_hash, 1, :window_end)
+                ON CONFLICT(username_hash) DO UPDATE SET
+                  attempts = CASE WHEN auth_attempts.window_end <= :timestamp
+                                  THEN 1 ELSE auth_attempts.attempts + 1 END,
+                  window_end = CASE WHEN auth_attempts.window_end <= :timestamp
+                                    THEN :window_end ELSE auth_attempts.window_end END
+                RETURNING attempts
+            """), {"username_hash": sha256(username.strip().lower().encode()).hexdigest(),
+                   "timestamp": timestamp, "window_end": timestamp + 900})
+            attempts = result.scalar_one()
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise HTTPException(503, "Limite de autenticação indisponível") from None
+        if attempts > 10:
+            raise HTTPException(429, "Tente novamente mais tarde")
+        return
     redis = redis_client()
     key = "auth:attempt:" + sha256(username.strip().lower().encode()).hexdigest()
     try:
@@ -106,6 +143,11 @@ async def live() -> dict:
 async def ready(session: AsyncSession = Depends(get_session)) -> dict:
     try:
         await session.execute(text("SELECT 1"))
+        if get_settings().self_hosted:
+            if await session.scalar(text("SELECT 1 FROM users LIMIT 1")) is None:
+                raise RuntimeError("Primeiro administrador não configurado")
+            await session.execute(text("SELECT 1 FROM auth_attempts LIMIT 1"))
+            return {"status": "ready"}
         redis = redis_client()
         try:
             await redis.ping()
@@ -119,7 +161,7 @@ async def ready(session: AsyncSession = Depends(get_session)) -> dict:
 @app.post("/api/v1/auth/login")
 async def login(body: LoginIn, session: AsyncSession = Depends(get_session)) -> dict:
     username = body.username.strip().lower()
-    await throttle_login(username)
+    await throttle_login(username, session)
     user = await session.scalar(select(User).where(User.username == username, User.active.is_(True)))
     if user is None or not verify_password(user.password_hash, body.password):
         raise HTTPException(401, "Credenciais inválidas")

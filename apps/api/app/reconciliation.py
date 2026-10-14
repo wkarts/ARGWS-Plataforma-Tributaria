@@ -31,10 +31,12 @@ import re
 from typing import Any
 
 
-_KEY = re.compile(r"[0-9]{44}\Z")
+# The NF-e/NFC-e key retains 44 positions when its CNPJ portion is alphanumeric.
+_KEY = re.compile(r"[0-9A-Z]{44}\Z")
 _PERIOD = re.compile(r"(20\d\d)-?(0[1-9]|1[0-2])\Z")
 _PERIOD_RFB = re.compile(r"(0[1-9]|1[0-2])/(20\d\d)\Z")
 _CREDIT_FIELDS = ("credit_to_appropriate", "credit_appropriated", "credit_used")
+_PREVIEW_MODELS = {("nfe", "55"), ("nfce", "65"), ("cte", "57")}
 
 
 def _field(value: Any, name: str, default: Any = None) -> Any:
@@ -51,7 +53,7 @@ def _period(value: Any) -> str | None:
 
 
 def _key(value: Any) -> str | None:
-    candidate = str(value).strip() if value is not None else ""
+    candidate = str(value).strip().upper() if value is not None else ""
     return candidate if _KEY.fullmatch(candidate) else None
 
 
@@ -158,6 +160,7 @@ def _item(*, period: str | None, key: str | None, resource: str,
         "document_key": key, "period": period, "resource": resource,
         "status": status, "reason": reason,
         "source_amount": _shown(_field(first_doc, "cbs_amount")) if first_doc else None,
+        "source_ibs_amount": _shown(_field(first_doc, "ibs_amount")) if first_doc else None,
         "official_amount": _shown(_field(first_record, "amount")) if first_record else None,
         **{name: _shown(_field(first_record, name)) if first_record else None
            for name in _CREDIT_FIELDS},
@@ -166,6 +169,8 @@ def _item(*, period: str | None, key: str | None, resource: str,
                                         if first_doc else None),
         "source_signature_present": (_field(first_doc, "signature_present")
                                      if first_doc else None),
+        "source_sha256": _field(first_doc, "sha256") if first_doc else None,
+        "model": _field(first_doc, "model") if first_doc else None,
         "document_ids": sorted({str(_field(doc, "id")) for doc in documents if _field(doc, "id")}),
         "record_ids": sorted({str(_field(rec, "id")) for rec in records if _field(rec, "id")}),
         "record_count": len(records),
@@ -281,3 +286,102 @@ def reconcile(records: Iterable[Any], documents: Iterable[Any], *,
     return {"summary": {"total": len(items), **{name: counts[name]
                                              for name in ("match", "mismatch", "missing", "ambiguous", "unknown")}},
             "items": items}
+
+
+def assisted_preview(records: Iterable[Any], documents: Iterable[Any], *,
+                     organization_id: str, company_id: str, period: str,
+                     official_receipts: int = 0,
+                     company_scope_complete: bool = True,
+                     unperioded_document_count: int = 0) -> dict:
+    """Calculate *declaratory* totals from XML claims, never tax payable/credit.
+
+    This function does not validate XML signatures, XSD, SEFAZ authorization,
+    right to credit or the completeness of an incremental Receita download.
+    A single key with two different XML byte versions is excluded until a
+    person reviews it. Events and unsupported document models are excluded.
+    """
+    normalized_period = _period(period)
+    if normalized_period is None:
+        raise ValueError("Competência inválida; use YYYY-MM")
+    source = [doc for doc in documents if _scope(doc, organization_id, company_id)
+              and _period(_field(doc, "period")) == normalized_period]
+    comparison = reconcile(records, source, organization_id=organization_id,
+                           company_id=company_id, period=normalized_period,
+                           company_scope_complete=company_scope_complete)
+    groups = _documents(source)
+    totals: dict[tuple[str, str, str], tuple[Decimal, int]] = {}
+    issues: list[dict[str, Any]] = []
+
+    def issue(code: str, key: str | None, *, documents: Iterable[Any] = (),
+              records: Iterable[str] = ()) -> None:
+        issues.append({"code": code, "document_key": key,
+                       "document_ids": sorted({str(_field(doc, "id")) for doc in documents
+                                               if _field(doc, "id")}),
+                       "record_ids": sorted(set(records))})
+
+    for (doc_period, key), candidates in groups.items():
+        if doc_period != normalized_period:
+            continue
+        if len(candidates) != 1:
+            issue("multiple_local_documents", key, documents=candidates)
+            continue
+        doc = candidates[0]
+        kind, model = _field(doc, "kind"), _field(doc, "model")
+        direction = _field(doc, "direction")
+        if (kind, model) not in _PREVIEW_MODELS:
+            issue("unsupported_model_or_event", key, documents=candidates)
+            continue
+        if direction not in {"incoming", "outgoing"}:
+            issue("document_direction_unknown", key, documents=candidates)
+            continue
+        if not _field(doc, "signature_present"):
+            issue("signature_element_absent", key, documents=candidates)
+            continue
+        if _field(doc, "authorization_status") != "reported_authorized":
+            issue("authorization_protocol_not_reported", key, documents=candidates)
+            continue
+        for tax, field in (("CBS", "cbs_amount"), ("IBS", "ibs_amount")):
+            amount = _money(_field(doc, field))
+            if amount is None:
+                issue("xml_tax_amount_unavailable", key, documents=candidates)
+                continue
+            grouping = (tax, direction, model)
+            previous, count = totals.get(grouping, (Decimal("0"), 0))
+            totals[grouping] = (previous + amount, count + 1)
+
+    for doc in source:
+        if _key(_field(doc, "document_key")) is None:
+            issue("local_document_or_period_unavailable", None, documents=[doc])
+    for item in comparison["items"]:
+        if item["status"] != "match":
+            issue(item["reason"], item["document_key"],
+                  documents=[{"id": doc_id} for doc_id in item["document_ids"]],
+                  records=item["record_ids"])
+
+    issues.sort(key=lambda entry: (entry["document_key"] or "", entry["code"],
+                                   entry["document_ids"], entry["record_ids"]))
+    deduplicated_issues = []
+    seen_issues = set()
+    for entry in issues:
+        identity = (entry["code"], entry["document_key"],
+                    tuple(entry["document_ids"]), tuple(entry["record_ids"]))
+        if identity not in seen_issues:
+            seen_issues.add(identity)
+            deduplicated_issues.append(entry)
+    return {
+        "status": "preliminary_unvalidated",
+        "basis": "Somas declaradas nos XMLs locais, separadas por tributo, direção e modelo; não constituem apuração oficial nem direito a crédito.",
+        "coverage": {
+            "local_xml_complete": False, "official_cbs_complete": False,
+            "ibs_official_connected": False,
+            "signature_cryptographically_verified": False,
+            "official_receipts": official_receipts,
+            "company_scope_complete": company_scope_complete,
+            "unperioded_document_count": unperioded_document_count,
+        },
+        "totals": [{"tax": tax, "direction": direction, "model": model,
+                    "amount": str(amount), "document_count": count}
+                   for (tax, direction, model), (amount, count) in sorted(totals.items())],
+        "summary": comparison["summary"], "items": comparison["items"],
+        "issues": deduplicated_issues,
+    }

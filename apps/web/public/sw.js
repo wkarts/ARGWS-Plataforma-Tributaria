@@ -1,5 +1,5 @@
-const CACHE_NAME = 'rt-console-shell-v1'
-const APP_SHELL = ['/', '/index.html', '/icon.svg', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png', '/manifest.webmanifest']
+const CACHE_NAME = 'fiscal-shell-v2'
+const APP_SHELL = ['/', '/index.html']
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)))
@@ -8,7 +8,9 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(Promise.all([
-    caches.keys().then((keys) => Promise.all(keys.filter((key) => key.startsWith('rt-console-shell-') && key !== CACHE_NAME).map((key) => caches.delete(key)))),
+    // O service worker controla a origem inteira desta instalação. Remova caches
+    // de versões anteriores para não reapresentar identidade visual antiga.
+    caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)))),
     self.clients.claim(),
   ]))
 })

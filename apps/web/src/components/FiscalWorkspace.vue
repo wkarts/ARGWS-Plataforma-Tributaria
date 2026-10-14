@@ -3,9 +3,9 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import type { ApiClient } from "../api.ts";
 import { formatBRL, formatDate } from "../logic.ts";
 import type {
+  AssistedPreview,
   FiscalDocument,
   LocalAgent,
-  Reconciliation,
 } from "../types.ts";
 import AppIcon from "./AppIcon.vue";
 
@@ -21,7 +21,7 @@ const props = defineProps<{
 const documents = ref<FiscalDocument[]>([]);
 const nextCursor = ref<string | null>(null);
 const agents = ref<LocalAgent[]>([]);
-const reconciliation = ref<Reconciliation | null>(null);
+const reconciliation = ref<AssistedPreview | null>(null);
 const busy = ref(false);
 const moreBusy = ref(false);
 const mutationBusy = ref(false);
@@ -42,7 +42,7 @@ const summaryEntries = computed(() =>
   ),
 );
 const summaryLabels: Record<string, string> = {
-  total: "Itens analisados",
+  total: "Itens conciliados",
   match: "Valores de CBS conferem",
   mismatch: "Divergentes",
   missing: "Sem correspondência",
@@ -72,7 +72,12 @@ const reasonLabels: Record<string, string> = {
   official_document_absent_in_covered_period: "Registro oficial ausente em competência com cobertura comprovada",
   official_coverage_unverified: "Cobertura incremental oficial não comprovada",
   local_document_or_period_unavailable: "XML sem chave ou competência identificável",
+  unsupported_model_or_event: "Evento ou modelo não incluído nos somatórios da prévia",
+  signature_element_absent: "XML sem elemento de assinatura",
+  authorization_protocol_not_reported: "XML sem protocolo que declare autorização",
+  xml_tax_amount_unavailable: "Valor do tributo não informado no XML",
 };
+const modelLabels: Record<string, string> = { "55": "NF-e", "65": "NFC-e", "57": "CT-e" };
 
 function clearSecret() {
   issuedToken.value = null;
@@ -107,7 +112,7 @@ async function load() {
       if (current !== generation) return;
       agents.value = page.items;
     } else {
-      const result = await props.api.reconciliation(company, reconciliationPeriod.value);
+      const result = await props.api.assistedPreview(company, reconciliationPeriod.value);
       if (current !== generation) return;
       reconciliation.value = result;
     }
@@ -316,36 +321,52 @@ onBeforeUnmount(() => {
     <template v-else>
       <div class="context-note">
         <AppIcon name="info" :size="18" /><span>
-          Conferência de valores de CBS dos XMLs recebidos com registros oficiais disponíveis para esta empresa. O resultado não valida assinatura, autorização, direito ao crédito, extinção do débito ou fechamento da apuração. Dados incrementais sem cobertura suficiente aparecem como indeterminados.
+          Prévia local e não homologada. A ferramenta soma CBS e IBS declarados nos XMLs recebidos e cruza CBS com recibos da Receita já importados. Assinatura e protocolo são apenas informações presentes no arquivo: não há verificação criptográfica, consulta de autorização em tempo real, reconhecimento de crédito ou fechamento fiscal.
         </span>
       </div>
       <div class="surface reconciliation-filter">
         <label for="reconciliation-period">Competência</label>
         <input id="reconciliation-period" v-model="reconciliationPeriod" type="month" required @change="load" />
-        <span>Compare uma competência de cada vez.</span>
+        <span>Valores declarados, separados por entrada, saída, tributo e modelo.</span>
       </div>
-      <div v-if="busy" class="surface panel table-empty">Calculando a comparação disponível...</div>
+      <div v-if="busy" class="surface panel table-empty">Calculando a prévia local...</div>
       <template v-else-if="reconciliation">
-        <div v-if="!reconciliation.company_scope_complete || reconciliation.unperioded_document_count" class="context-note">
+        <div class="context-note"><AppIcon name="info" :size="18" /><span>
+          {{ reconciliation.basis }} Cobertura XML e CBS oficial incompleta; {{ reconciliation.coverage.official_receipts }} recibo(s) de CBS concluído(s) aparecem nesta competência. IBS não é comparado a uma API oficial.
+        </span></div>
+        <div v-if="!reconciliation.coverage.company_scope_complete || reconciliation.coverage.unperioded_document_count" class="context-note">
           <AppIcon name="warning" :size="18" /><span>
-            <template v-if="!reconciliation.company_scope_complete">Há mais de uma empresa cadastrada para esta raiz CNPJ. A ausência de XML nesta empresa não comprova falta do documento nas demais filiais. </template>
-            <template v-if="reconciliation.unperioded_document_count">{{ reconciliation.unperioded_document_count }} XML(s) sem competência identificada ficaram fora deste filtro mensal; examine a lista de documentos.</template>
+            <template v-if="!reconciliation.coverage.company_scope_complete">Há mais de uma empresa cadastrada para esta raiz CNPJ. A ausência de XML nesta empresa não comprova falta do documento nas demais filiais. </template>
+            <template v-if="reconciliation.coverage.unperioded_document_count">{{ reconciliation.coverage.unperioded_document_count }} XML(s) sem competência identificada ficaram fora deste filtro mensal; examine a lista de documentos.</template>
           </span>
         </div>
+        <section class="surface panel table-panel">
+          <div class="panel-heading"><div><div class="eyebrow">PRÉVIA DECLARATÓRIA · {{ reconciliation.period }}</div><h2>Totais dos XMLs recebidos</h2></div><span class="small-muted">Sem saldo a pagar ou crédito reconhecido</span></div>
+          <div v-if="!reconciliation.totals.length" class="table-empty">Nenhum XML com chave, modelo, direção, elemento de assinatura e protocolo declarados apto a compor a prévia.</div>
+          <div v-else class="table-scroll"><table><thead><tr><th>Tributo</th><th>Operação</th><th>Documento</th><th>XMLs</th><th>Valor declarado</th></tr></thead><tbody>
+            <tr v-for="entry in reconciliation.totals" :key="`${entry.tax}-${entry.direction}-${entry.model}`"><td><strong>{{ entry.tax }}</strong></td><td>{{ entry.direction === "incoming" ? "Entrada" : "Saída" }}</td><td>{{ modelLabels[entry.model] || entry.model }}</td><td>{{ entry.document_count }}</td><td class="amount">{{ formatBRL(entry.amount) }}</td></tr>
+          </tbody></table></div>
+        </section>
         <div v-if="summaryEntries.length" class="reconciliation-summary">
           <div v-for="[label, value] in summaryEntries" :key="label" class="surface reconciliation-stat"><span>{{ summaryLabels[label] || label.replace(/_/g, " ") }}</span><strong>{{ value }}</strong></div>
         </div>
         <section class="surface panel table-panel">
-          <div class="panel-heading"><div><div class="eyebrow">CRUZAMENTO DE FONTES</div><h2>Conciliação por documento</h2></div><span class="small-muted">{{ reconciliation.items.length }} resultados</span></div>
+          <div class="panel-heading"><div><div class="eyebrow">CRUZAMENTO DE FONTES</div><h2>Conciliação rastreável</h2></div><span class="small-muted">{{ reconciliation.items.length }} resultados · {{ reconciliation.issues.length }} críticas</span></div>
           <div v-if="!reconciliation.items.length" class="table-empty">Ainda não há documentos e registros comparáveis nesta empresa.</div>
-          <div v-else class="table-scroll"><table><thead><tr><th>Chave do documento</th><th>Resultado</th><th>Motivo</th><th>XML</th><th>Origem oficial</th><th>Crédito a apropriar</th><th>Apropriado</th><th>Utilizado</th></tr></thead><tbody>
+          <div v-else class="table-scroll"><table><thead><tr><th>Chave / evidência</th><th>Resultado</th><th>Motivo</th><th>CBS XML</th><th>IBS XML</th><th>CBS Receita</th><th>Crédito a apropriar</th><th>Apropriado</th><th>Utilizado</th></tr></thead><tbody>
             <tr v-for="(item, index) in reconciliation.items" :key="`${item.document_key}-${index}`">
-              <td><strong class="document-key">{{ item.document_key || "Sem chave identificável" }}</strong></td>
+              <td><strong class="document-key">{{ item.document_key || "Sem chave identificável" }}</strong><span class="subcell">{{ item.model ? modelLabels[item.model] || item.model : "Modelo indefinido" }} · XML {{ item.document_ids.join(", ") || "ausente" }}</span><span v-if="item.source_sha256" class="subcell">SHA-256 <code class="document-hash" :title="item.source_sha256">{{ item.source_sha256 }}</code></span><span v-if="item.record_ids.length" class="subcell">Registros CBS: {{ item.record_ids.join(", ") }}</span></td>
               <td><span class="status-pill" :class="item.status === 'match' ? 'success' : item.status === 'unknown' ? 'neutral' : 'error'"><span class="status-dot"></span>{{ resultLabels[item.status] || item.status }}</span></td>
               <td>{{ item.reason ? reasonLabels[item.reason] || item.reason : "—" }}</td>
-              <td class="amount">{{ formatBRL(item.source_amount) }}</td><td class="amount">{{ formatBRL(item.official_amount) }}</td>
+              <td class="amount">{{ formatBRL(item.source_amount) }}</td><td class="amount">{{ formatBRL(item.source_ibs_amount) }}</td><td class="amount">{{ formatBRL(item.official_amount) }}</td>
               <td class="amount">{{ formatBRL(item.credit_to_appropriate) }}</td><td class="amount">{{ formatBRL(item.credit_appropriated) }}</td><td class="amount">{{ formatBRL(item.credit_used) }}</td>
             </tr>
+          </tbody></table></div>
+        </section>
+        <section v-if="reconciliation.issues.length" class="surface panel table-panel">
+          <div class="panel-heading"><div><div class="eyebrow">REVISÃO ASSISTIDA</div><h2>Críticas da competência</h2></div><span class="small-muted">{{ reconciliation.issues.length }} ocorrências</span></div>
+          <div class="table-scroll"><table><thead><tr><th>Documento</th><th>Motivo</th><th>Evidência</th></tr></thead><tbody>
+            <tr v-for="(issue, index) in reconciliation.issues" :key="`${issue.code}-${index}`"><td class="document-key">{{ issue.document_key || "Sem chave" }}</td><td>{{ reasonLabels[issue.code] || issue.code }}</td><td>XML: {{ issue.document_ids.join(", ") || "—" }} · CBS: {{ issue.record_ids.join(", ") || "—" }}</td></tr>
           </tbody></table></div>
         </section>
       </template>
