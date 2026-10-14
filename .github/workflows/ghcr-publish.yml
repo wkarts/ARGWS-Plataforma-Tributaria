@@ -58,12 +58,12 @@ jobs:
           tag="internal-build-$GITHUB_SHA"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           ref="repos/$GITHUB_REPOSITORY/git/ref/tags/$tag"
-          existing="$(gh api "$ref" --jq '.object.sha' 2>/dev/null || true)"
+          existing="$(gh api "$ref" --jq '.object.sha // empty' 2>/dev/null || true)"
           if [[ -z "$existing" ]]; then
             gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
               -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA" >/dev/null
           elif [[ "$existing" != "$GITHUB_SHA" ]]; then
-            echo 'Internal staging tag points to a different commit' >&2; exit 1
+            echo "Internal staging tag points to $existing, expected $GITHUB_SHA" >&2; exit 1
           fi
           draft="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --jq '.draft' 2>/dev/null || true)"
           if [[ -z "$draft" ]]; then
