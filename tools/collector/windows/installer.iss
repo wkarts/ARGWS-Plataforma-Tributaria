@@ -62,6 +62,19 @@ Filename: "{app}\fiscal-xml-gui-windows-x64.exe"; Description: "Abrir {#APP_DISP
 var
   ServiceWasRunning: Boolean;
 
+function InitializeSetup(): Boolean;
+var
+  ExitCode: Integer;
+begin
+  { Capture the prior state before Inno's close-applications pass can stop
+    an in-use worker. PrepareToInstall may observe an already stopped service. }
+  ServiceWasRunning := False;
+  Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -NonInteractive -Command "if ((Get-Service -Name FiscalXmlCollector -ErrorAction SilentlyContinue).Status -eq ''Running'') { exit 0 } else { exit 1 }"',
+    '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
+  if Result then ServiceWasRunning := ExitCode = 0;
+end;
+
 procedure RunManager(const ActionName: String);
 var
   ExitCode: Integer;
@@ -81,12 +94,9 @@ var
   PowerShell: String;
 begin
   Result := '';
-  ServiceWasRunning := False;
   PowerShell := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
-  if not Exec(PowerShell, '-NoProfile -Command "if ((Get-Service -Name FiscalXmlCollector -ErrorAction SilentlyContinue).Status -eq ''Running'') { exit 0 } else { exit 1 }"', '', SW_HIDE, ewWaitUntilTerminated, ExitCode) then Exit;
-  ServiceWasRunning := ExitCode = 0;
   if ServiceWasRunning then begin
-    if (not Exec(PowerShell, '-NoProfile -NonInteractive -Command "Stop-Service -Name FiscalXmlCollector -ErrorAction Stop; (Get-Service -Name FiscalXmlCollector).WaitForStatus(''Stopped'', [TimeSpan]::FromSeconds(45))"', '', SW_HIDE, ewWaitUntilTerminated, ExitCode)) or (ExitCode <> 0) then
+    if (not Exec(PowerShell, '-NoProfile -NonInteractive -Command "if ((Get-Service -Name FiscalXmlCollector -ErrorAction SilentlyContinue).Status -eq ''Running'') { Stop-Service -Name FiscalXmlCollector -ErrorAction Stop; (Get-Service -Name FiscalXmlCollector).WaitForStatus(''Stopped'', [TimeSpan]::FromSeconds(45)) }"', '', SW_HIDE, ewWaitUntilTerminated, ExitCode)) or (ExitCode <> 0) then
       Result := 'Não foi possível parar o serviço para atualizar os binários. Tente novamente após parar o serviço.';
   end;
 end;

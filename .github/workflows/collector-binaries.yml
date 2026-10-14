@@ -213,10 +213,35 @@ jobs:
           }
           $marker = Join-Path $collectorHome 'ci-preservation-check.txt'
           Set-Content -LiteralPath $marker -Value 'keep the SQLite home' -Encoding ascii
+          $preUpgrade = (Get-Service -Name FiscalXmlCollector).Status
+          if ($preUpgrade -ne 'Running') {
+            $logs = Join-Path $collectorHome 'logs'
+            if (Test-Path -LiteralPath $logs) {
+              Get-ChildItem -LiteralPath $logs -File | ForEach-Object {
+                Write-Output "WinSW log: $($_.Name)"
+                Get-Content -LiteralPath $_.FullName -Tail 50 | Write-Output
+              }
+            }
+            throw "Service stopped before upgrade: $preUpgrade"
+          }
+          $upgradeLog = Join-Path $env:RUNNER_TEMP 'collector-upgrade.log'
           $upgrade = Start-Process -FilePath $setup `
-            -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$installDir`"" -Wait -PassThru
+            -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$installDir`" /LOG=`"$upgradeLog`"" -Wait -PassThru
           if ($upgrade.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $marker)) { throw 'Upgrade lost customer data or failed' }
-          (Get-Service -Name FiscalXmlCollector).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+          try {
+            (Get-Service -Name FiscalXmlCollector).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+          } catch {
+            Write-Output "Service status after upgrade: $((Get-Service -Name FiscalXmlCollector).Status)"
+            if (Test-Path -LiteralPath $upgradeLog) { Get-Content -LiteralPath $upgradeLog -Tail 100 | Write-Output }
+            $logs = Join-Path $collectorHome 'logs'
+            if (Test-Path -LiteralPath $logs) {
+              Get-ChildItem -LiteralPath $logs -File | ForEach-Object {
+                Write-Output "WinSW log: $($_.Name)"
+                Get-Content -LiteralPath $_.FullName -Tail 50 | Write-Output
+              }
+            }
+            throw
+          }
           & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $manager -Action Stop -Home $collectorHome
           if ($LASTEXITCODE -ne 0 -or (Get-Service -Name FiscalXmlCollector).Status -ne 'Stopped') { throw 'WinSW service stop failed' }
           & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $manager -Action Start -Home $collectorHome
