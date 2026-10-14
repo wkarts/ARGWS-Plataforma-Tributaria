@@ -39,7 +39,13 @@ publisher = (ROOT / 'scripts/publish_release.sh').read_text(encoding='utf-8')
 workflow = (ROOT / '.github/workflows/ghcr-publish.yml').read_text(encoding='utf-8')
 windows = (ROOT / '.github/workflows/deployer-windows.yml').read_text(encoding='utf-8')
 collector = (ROOT / '.github/workflows/collector-binaries.yml').read_text(encoding='utf-8')
-assert workflow.index('tags: ${{ steps.sha.outputs.image }}:${{ steps.sha.outputs.tag }}') < workflow.index('needs: [source, images, deployer, collector]')
+assert workflow.index('tags: ${{ steps.sha.outputs.image }}:${{ steps.sha.outputs.tag }}') < workflow.index('needs: [source, stage, images, deployer, collector]')
+assert 'needs: stage' in workflow and 'staging_tag: ${{ needs.stage.outputs.tag }}' in workflow
+assert 'gh release download "$STAGING_TAG"' in workflow
+assert 'gh release delete "$STAGING_TAG" --yes --cleanup-tag' in workflow
+assert 'actions/download-artifact@' not in workflow
+assert 'actions/upload-artifact@' not in collector + windows
+assert 'gh release upload $env:STAGING_TAG' in collector + windows
 assert 'steps.sha.outputs.tag' in workflow and 'tag=sha-${GITHUB_SHA::12}' in workflow
 assert 'bash scripts/publish_release.sh release-files' in workflow
 assert 'uses: ./.github/workflows/collector-binaries.yml' in workflow

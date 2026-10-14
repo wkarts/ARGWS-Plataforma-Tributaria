@@ -26,7 +26,7 @@ Se o destino já tiver `compose.yaml`, use `generate ... --force`. Essa opção 
 ```bash
 python tools/deployer/deployer.py status --directory ./installation
 python tools/deployer/deployer.py deploy --directory ./installation --yes
-python tools/deployer/deployer.py upgrade --directory ./installation --tag 0.2.0 --yes
+python tools/deployer/deployer.py upgrade --directory ./installation --tag 0.1.0 --yes
 python tools/deployer/deployer.py rollback --directory ./installation --tag 0.1.0 --yes
 python tools/deployer/deployer.py export --directory ./installation --output ./installation.zip
 ```

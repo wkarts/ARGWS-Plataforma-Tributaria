@@ -84,7 +84,44 @@ promote() {
 }
 
 if [[ "$CHANNEL" == develop ]]; then
-  # Uma única pré-release contínua. O SHA permanece fixo e a tag develop é móvel.
+  # Nunca deslocar as tags móveis por um workflow antigo ainda na fila.
+  head_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/develop" --jq '.object.sha')"
+  if [[ "$head_sha" != "$GITHUB_SHA" ]]; then
+    echo "Develop avançou para $head_sha; build $GITHUB_SHA não será promovido."
+    exit 0
+  fi
+
+  # A release móvel fica privada durante a troca dos arquivos. Em falha, o retry
+  # recomeça sobre o mesmo draft sem anunciar binários e checksums misturados.
+  if release_exists pre-release; then
+    gh release edit pre-release --draft=true --prerelease --latest=false
+  else
+    status=$?
+    [[ "$status" -eq 1 ]] || exit "$status"
+    gh release create pre-release --target "$GITHUB_SHA" --title "Develop $VERSION" \
+      --notes "Build contínuo develop em $GITHUB_SHA" --prerelease --draft --latest=false
+  fi
+  gh release upload pre-release "$files"/* --clobber
+
+  verified="$(mktemp -d)"
+  trap 'rm -rf "$verified"' EXIT
+  gh release download pre-release --dir "$verified"
+  python3 - "$files" "$verified" <<'PY'
+import pathlib
+import sys
+
+expected, actual = ({p.name for p in pathlib.Path(arg).iterdir() if p.is_file()} for arg in sys.argv[1:])
+if expected != actual:
+    raise SystemExit(f'Assets da pre-release faltantes ou extras: {sorted(expected ^ actual)}')
+PY
+  cmp "$files/SHA256SUMS.txt" "$verified/SHA256SUMS.txt"
+  (cd "$verified" && sha256sum -c SHA256SUMS.txt)
+
+  head_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/develop" --jq '.object.sha')"
+  if [[ "$head_sha" != "$GITHUB_SHA" ]]; then
+    echo "Develop avançou para $head_sha durante a validação; build antigo fica em draft."
+    exit 0
+  fi
   for ref in "${image_refs[@]}"; do
     image="${ref%@*}"
     docker buildx imagetools create -t "$image:develop" "$ref"
@@ -99,16 +136,9 @@ if [[ "$CHANNEL" == develop ]]; then
     gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
       -f ref=refs/tags/pre-release -f sha="$GITHUB_SHA" >/dev/null
   fi
-  if release_exists pre-release; then
-    gh release edit pre-release --title "Develop $VERSION" --notes "Build contínuo develop em $GITHUB_SHA" \
-      --prerelease --draft=false --latest=false
-  else
-    status=$?
-    [[ "$status" -eq 1 ]] || exit "$status"
-    gh release create pre-release --target "$GITHUB_SHA" --title "Develop $VERSION" \
-      --notes "Build contínuo develop em $GITHUB_SHA" --prerelease --latest=false
-  fi
-  gh release upload pre-release "$files"/* --clobber
+  [[ "$(ref_sha pre-release)" == "$GITHUB_SHA" ]]
+  gh release edit pre-release --title "Develop $VERSION" --notes "Build contínuo develop em $GITHUB_SHA" \
+    --prerelease --draft=false --latest=false
   exit 0
 fi
 

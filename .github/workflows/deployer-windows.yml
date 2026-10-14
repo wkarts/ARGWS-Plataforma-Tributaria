@@ -3,6 +3,11 @@ on:
   pull_request:
     paths: ['tools/deployer/**', 'deploy/**', 'scripts/version.py', '.github/workflows/deployer-windows.yml']
   workflow_call:
+    inputs:
+      staging_tag:
+        description: Draft release tag used to transfer verified binaries to the publisher
+        required: true
+        type: string
   workflow_dispatch:
 permissions:
   contents: read
@@ -10,6 +15,7 @@ jobs:
   package:
     runs-on: windows-latest
     timeout-minutes: 35
+    permissions: {contents: write}
     steps:
       - uses: actions/checkout@v4
         with: {persist-credentials: false}
@@ -74,9 +80,20 @@ jobs:
             "$sha  $($file.Name)"
           }
           $lines | Set-Content -Encoding ascii dist/release/SHA256SUMS.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: fiscal-deployer-${{ github.sha }}
-          path: dist/release/*
-          if-no-files-found: error
-          retention-days: 30
+      - name: Stage verified deployer binaries for publication
+        if: inputs.staging_tag != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAGING_TAG: ${{ inputs.staging_tag }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Copy-Item dist/release/SHA256SUMS.txt dist/release/SHA256SUMS-deployer.txt
+          gh release upload $env:STAGING_TAG `
+            dist/release/reforma-tributaria-deployer-win-x64.exe `
+            dist/release/reforma-tributaria-deployer-gui-win-x64.exe `
+            dist/release/Reforma-Tributaria-Deployer-GUI-Windows-x64.zip `
+            dist/release/README-Deployer.md `
+            dist/release/SHA256SUMS-deployer.txt `
+            --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'Deployer staging failed' }

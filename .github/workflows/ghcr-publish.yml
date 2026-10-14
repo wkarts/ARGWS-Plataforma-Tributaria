@@ -43,18 +43,53 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
+  stage:
+    needs: source
+    runs-on: ubuntu-latest
+    permissions: {contents: write}
+    outputs:
+      tag: ${{ steps.metadata.outputs.tag }}
+    steps:
+      - id: metadata
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="internal-build-$GITHUB_SHA"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          ref="repos/$GITHUB_REPOSITORY/git/ref/tags/$tag"
+          existing="$(gh api "$ref" --jq '.object.sha' 2>/dev/null || true)"
+          if [[ -z "$existing" ]]; then
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA" >/dev/null
+          elif [[ "$existing" != "$GITHUB_SHA" ]]; then
+            echo 'Internal staging tag points to a different commit' >&2; exit 1
+          fi
+          draft="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" --jq '.draft' 2>/dev/null || true)"
+          if [[ -z "$draft" ]]; then
+            gh release create "$tag" --draft --verify-tag \
+              --title "Internal build assets ${GITHUB_SHA::12}" \
+              --notes "Temporary verified binaries for commit $GITHUB_SHA." \
+              --repo "$GITHUB_REPOSITORY"
+          elif [[ "$draft" != true ]]; then
+            echo 'Internal staging release must remain a draft' >&2; exit 1
+          fi
   bases:
     needs: source
     uses: ./.github/workflows/ghcr-bases.yml
     permissions: {contents: read, packages: write}
   deployer:
-    needs: verify
+    needs: stage
     uses: ./.github/workflows/deployer-windows.yml
-    permissions: {contents: read}
+    with:
+      staging_tag: ${{ needs.stage.outputs.tag }}
+    permissions: {contents: write}
   collector:
-    needs: verify
+    needs: stage
     uses: ./.github/workflows/collector-binaries.yml
-    permissions: {contents: read}
+    with:
+      staging_tag: ${{ needs.stage.outputs.tag }}
+    permissions: {contents: write}
   images:
     needs: [source, bases]
     runs-on: ubuntu-latest
@@ -119,25 +154,35 @@ jobs:
           subject-digest: ${{ steps.publish.outputs.digest }}
           push-to-registry: true
   release:
-    needs: [source, images, deployer, collector]
+    needs: [source, stage, images, deployer, collector]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions: {contents: write, packages: write}
     steps:
       - uses: actions/checkout@v4
         with: {persist-credentials: false}
-      - uses: actions/download-artifact@v4
-        with:
-          name: fiscal-deployer-${{ github.sha }}
-          path: release-deployer
-      - uses: actions/download-artifact@v4
-        with:
-          name: fiscal-collector-linux-${{ github.sha }}
-          path: release-collector-linux
-      - uses: actions/download-artifact@v4
-        with:
-          name: fiscal-collector-windows-${{ github.sha }}
-          path: release-collector-windows
+      - name: Download binary assets from the internal draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAGING_TAG: ${{ needs.stage.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-deployer release-collector-linux release-collector-windows
+          for file in reforma-tributaria-deployer-win-x64.exe \
+                      reforma-tributaria-deployer-gui-win-x64.exe \
+                      Reforma-Tributaria-Deployer-GUI-Windows-x64.zip \
+                      README-Deployer.md SHA256SUMS-deployer.txt; do
+            gh release download "$STAGING_TAG" --pattern "$file" --dir release-deployer --repo "$GITHUB_REPOSITORY"
+          done
+          for file in fiscal-xml-collector-linux-amd64 SHA256SUMS-collector-linux.txt; do
+            gh release download "$STAGING_TAG" --pattern "$file" --dir release-collector-linux --repo "$GITHUB_REPOSITORY"
+          done
+          for file in fiscal-xml-collector-windows-amd64.exe SHA256SUMS-collector-windows.txt; do
+            gh release download "$STAGING_TAG" --pattern "$file" --dir release-collector-windows --repo "$GITHUB_REPOSITORY"
+          done
+          mv release-deployer/SHA256SUMS-deployer.txt release-deployer/SHA256SUMS.txt
+          mv release-collector-linux/SHA256SUMS-collector-linux.txt release-collector-linux/SHA256SUMS.txt
+          mv release-collector-windows/SHA256SUMS-collector-windows.txt release-collector-windows/SHA256SUMS.txt
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -216,6 +261,17 @@ jobs:
             echo 'Use IMAGES.txt and BASE-IMAGES.txt for immutable registry digests.'
           } > release-files/BUILD-INFO.txt
           (cd release-files && sha256sum -- * > SHA256SUMS.txt)
+      - name: Confirm the branch still points to this verified commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANNEL: ${{ needs.source.outputs.channel }}
+        run: |
+          set -euo pipefail
+          head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$CHANNEL" --jq '.object.sha')"
+          [[ "$head" == "$GITHUB_SHA" ]] || {
+            echo "$CHANNEL advanced to $head; skipping publication of stale $GITHUB_SHA" >&2
+            exit 1
+          }
       - name: Promote verified tags and publish GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -223,3 +279,10 @@ jobs:
           CHANNEL: ${{ needs.source.outputs.channel }}
         run: |
           bash scripts/publish_release.sh release-files
+      - name: Remove the temporary draft and its tag after successful publication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAGING_TAG: ${{ needs.stage.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release delete "$STAGING_TAG" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY"

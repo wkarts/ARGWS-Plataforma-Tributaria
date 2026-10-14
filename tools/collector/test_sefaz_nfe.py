@@ -14,6 +14,8 @@ from unittest.mock import Mock, patch
 
 
 MODULE_PATH = Path(__file__).with_name("sefaz_nfe.py")
+SYNTHETIC_CERT = Path(__file__).resolve().with_name("synthetic-cert.pem")
+SYNTHETIC_KEY = Path(__file__).resolve().with_name("synthetic-key.pem")
 SPEC = importlib.util.spec_from_file_location("sefaz_nfe", MODULE_PATH)
 assert SPEC and SPEC.loader
 NFE_MODULE = importlib.util.module_from_spec(SPEC)
@@ -116,7 +118,7 @@ class NFeDistributionTests(unittest.TestCase):
                     self.assertEqual(result.next_state.last_nsu, STATE.last_nsu)
                 restored = PollState.from_mapping(result.next_state.as_dict())
                 self.assertEqual(restored, result.next_state)
-                client = NFeDistributionClient("/synthetic/cert.pem", "/synthetic/key.pem")
+                client = NFeDistributionClient(SYNTHETIC_CERT, SYNTHETIC_KEY)
                 with self.assertRaisesRegex(NFeDistributionError, "adiada"):
                     client.fetch(restored, now=NOW + timedelta(minutes=1))
 
@@ -149,7 +151,7 @@ class NFeDistributionTests(unittest.TestCase):
             parse_response(response("137", environment="1"), STATE, now=NOW)
 
     def test_transport_uses_standard_tls_context_with_client_pem(self) -> None:
-        client = NFeDistributionClient("/synthetic/cert.pem", "/synthetic/key.pem")
+        client = NFeDistributionClient(SYNTHETIC_CERT, SYNTHETIC_KEY)
         fake = Mock()
         fake.minimum_version = None
         raw = response("137")
@@ -159,7 +161,7 @@ class NFeDistributionTests(unittest.TestCase):
             result = client.fetch(STATE, now=NOW)
         self.assertEqual(result.cstat, "137")
         self.assertEqual(fake.minimum_version, NFE_MODULE.ssl.TLSVersion.TLSv1_2)
-        fake.load_cert_chain.assert_called_once_with(certfile="/synthetic/cert.pem", keyfile="/synthetic/key.pem")
+        fake.load_cert_chain.assert_called_once_with(certfile=str(SYNTHETIC_CERT), keyfile=str(SYNTHETIC_KEY))
         self.assertEqual(sent.call_args.args[0], "hom1.nfe.fazenda.gov.br")
 
     def test_http_request_is_soap12_post_and_does_not_follow_redirect(self) -> None:
@@ -174,7 +176,7 @@ class NFeDistributionTests(unittest.TestCase):
         connection.close.assert_called_once()
 
     def test_fetch_exposes_invalid_raw_response_for_quarantine(self) -> None:
-        client = NFeDistributionClient("/synthetic/cert.pem", "/synthetic/key.pem")
+        client = NFeDistributionClient(SYNTHETIC_CERT, SYNTHETIC_KEY)
         raw = b"<?xml version='1.0'?><broken>"
         with patch.object(NFE_MODULE.ssl, "create_default_context"), patch.object(
             NFE_MODULE, "_post_soap", return_value=raw

@@ -10,7 +10,7 @@ RUN npm run build
 FROM ${NGINX_BASE}
 ARG APP_VERSION
 ARG BUILD_SHA
-LABEL org.opencontainers.image.source="https://github.com/wkarts/reforma-tributaria-platform" \
+LABEL org.opencontainers.image.source="https://github.com/wkarts/ARGWS-Plataforma-Tributaria" \
       org.opencontainers.image.version="${APP_VERSION}" \
       org.opencontainers.image.revision="${BUILD_SHA}"
 COPY infra/docker/nginx.conf /etc/nginx/nginx.conf
