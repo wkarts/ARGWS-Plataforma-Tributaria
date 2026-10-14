@@ -4,7 +4,7 @@ import test from "node:test";
 
 Object.assign(globalThis, {
   window: {
-    __RT_APP_CONFIG__: { apiBaseUrl: "/api/v1" },
+    __APP_CONFIG__: { apiBaseUrl: "/api/v1" },
     setTimeout: globalThis.setTimeout,
     clearTimeout: globalThis.clearTimeout,
   },
@@ -94,6 +94,59 @@ test("confere SHA-256 dos bytes antes de liberar download bruto", async () => {
       (error: unknown) =>
         error instanceof ApiError && /falhou na conferência SHA-256/.test(error.message),
     );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("identidade pública não envia token e alteração usa multipart autorizado", async () => {
+  const originalFetch = globalThis.fetch;
+  const identity = {
+    display_name: "Escritório Exemplo", short_name: "Exemplo",
+    primary_color: "#224466", secondary_color: "#112233", logo_url: null, version: 1,
+  };
+  let calls = 0;
+  globalThis.fetch = async (input, options) => {
+    calls++;
+    assert.equal(input, "/api/v1/installation/branding");
+    const headers = new Headers(options?.headers);
+    if (calls === 1) {
+      assert.equal(options?.method, undefined);
+      assert.equal(headers.has("Authorization"), false);
+    } else {
+      assert.equal(options?.method, "PUT");
+      assert.equal(headers.get("Authorization"), "Bearer token-teste");
+      assert.equal(headers.has("Content-Type"), false);
+      assert.ok(options?.body instanceof FormData);
+      assert.equal(JSON.parse(String((options?.body as FormData).get("payload"))).display_name, "Escritório Exemplo");
+    }
+    return new Response(JSON.stringify(identity), { status: 200 });
+  };
+  try {
+    const client = new ApiClient(() => "token-teste", () => {});
+    assert.equal((await client.installationBrand()).version, 1);
+    assert.equal((await client.saveInstallationBrand({
+      display_name: identity.display_name, short_name: identity.short_name,
+      primary_color: identity.primary_color, secondary_color: identity.secondary_color,
+      version: 1,
+    })).display_name, identity.display_name);
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("prévia da apuração informa empresa e competência sem estimar valores no cliente", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    assert.equal(input, "/api/v1/assisted-preview?company_id=empresa-1&period=2026-10");
+    return new Response(JSON.stringify({ company_id: "empresa-1", period: "2026-10",
+      status: "preliminary_unvalidated", totals: [], summary: { total: 0 } }), { status: 200 });
+  };
+  try {
+    const client = new ApiClient(() => "token-teste", () => {});
+    assert.equal((await client.assistedPreview("empresa-1", "2026-10")).status,
+      "preliminary_unvalidated");
   } finally {
     globalThis.fetch = originalFetch;
   }

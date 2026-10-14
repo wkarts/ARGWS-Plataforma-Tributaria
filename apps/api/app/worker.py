@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import json
 
 from celery import Celery
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.config import get_settings
 from app.db import Session, engine
@@ -30,6 +30,41 @@ celery_app.conf.update(task_default_queue="cbs", task_serializer="json", accept_
 
 def aware(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def authorization_rejection(organization_id: str, base: str, resource: str,
+                            environment: str) -> str | None:
+    """Recheck mutable operator permissions when a queued request reaches the worker."""
+    if environment == "fixture":
+        return None if settings.provider_mode == "fixture" else "Ambiente de teste desabilitado"
+    if settings.provider_mode != "receita":
+        return "Integração CBS desabilitada"
+    if organization_id != settings.cbs_credential_organization_id or base not in settings.allowed_bases:
+        return "Credencial CBS revogada para organização ou raiz CNPJ"
+    if (environment == "restricted" and not settings.cbs_restricted_enabled
+            or environment == "production" and not settings.cbs_production_enabled
+            or environment not in {"restricted", "production"}):
+        return "Ambiente CBS desabilitado"
+    if (resource not in {"debitos", "creditos", "pagamentos", "recolhimentos"}
+            or resource in {"pagamentos", "recolhimentos"} and not settings.cbs_payments_enabled):
+        return "Recurso CBS desabilitado"
+    return None
+
+
+async def block_revoked(query_id: str, reason: str) -> None:
+    async with Session() as session, session.begin():
+        query = await session.get(Query, query_id, with_for_update=True)
+        if query is None or query.status not in {"opening", "processing"}:
+            return
+        # A request that already has a ticket must remain subject to manual
+        # reconciliation; do not free its active-root constraint automatically.
+        query.status = "uncertain" if query.ticket else "failed"
+        query.error = reason
+        query.next_poll_at = None
+        session.add(AuditEvent(organization_id=query.organization_id, actor="worker",
+            action="query.authorization_revoked", entity_id=query.id,
+            metadata_json={"reason": reason, "environment": query.environment,
+                           "resource": query.resource}))
 
 
 async def due_ids(limit: int = 1) -> list[str]:
@@ -85,6 +120,15 @@ async def process_one(query_id: str) -> None:
         ticket, org_id, company_id = query.ticket, query.organization_id, company.id
         opening_started = query.opening_started_at
         stage = query.status
+        rejection = authorization_rejection(org_id, company.cnpj_base, resource, environment)
+        if settings.self_hosted and environment != "fixture":
+            branches = await session.scalar(select(func.count()).select_from(Company).where(
+                Company.organization_id == org_id, Company.cnpj_base == company.cnpj_base))
+            if branches != 1:
+                rejection = "Raiz CNPJ ambígua após cadastro de filial"
+    if rejection:
+        await block_revoked(query_id, rejection)
+        return
     provider = provider_for(environment, settings)
     if stage == "opening":
         callback = (settings.cbs_webhook_base_url.rstrip("/") +

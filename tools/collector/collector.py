@@ -155,13 +155,14 @@ def load_config(path: Path) -> dict[str, Any]:
     return validate_config(json.loads(path.read_text(encoding="utf-8")))
 
 
-def read_token(config: dict[str, Any]) -> str:
-    env_token = os.environ.get(config["token_env"], "").strip()
+def read_token(config: dict[str, Any], *, allow_environment: bool = True) -> str:
+    env_token = os.environ.get(config["token_env"], "").strip() if allow_environment else ""
     if env_token:
         if "\n" in env_token or "\r" in env_token:
             raise ValueError("Variável de token contém caracteres inválidos")
         return env_token
-    filename = os.environ.get("FISCAL_COLLECTOR_TOKEN_FILE") or config["token_file"]
+    filename = ((os.environ.get("FISCAL_COLLECTOR_TOKEN_FILE") if allow_environment else None)
+                or config["token_file"])
     if not filename:
         raise ValueError("Token ausente: defina a variável ou um arquivo de segredo")
     path = Path(filename)
@@ -669,7 +670,8 @@ def status(conn: sqlite3.Connection, detailed: bool = False) -> dict[str, Any]:
     return result
 
 
-def check(config: dict[str, Any], *, needs_token: bool = True) -> dict[str, Any]:
+def check(config: dict[str, Any], *, needs_token: bool = True,
+          allow_environment: bool = True) -> dict[str, Any]:
     missing = [x for x in config["roots"] if not Path(x).is_dir()]
     if missing:
         raise ValueError(f"Diretórios de XML não encontrados: {', '.join(missing)}")
@@ -677,7 +679,7 @@ def check(config: dict[str, Any], *, needs_token: bool = True) -> dict[str, Any]
     if unreadable:
         raise ValueError(f"Sem permissão para ler diretórios XML: {', '.join(unreadable)}")
     if needs_token:
-        read_token(config)
+        read_token(config, allow_environment=allow_environment)
     sefaz = config["sefaz_nfe"]
     if sefaz:
         for field in ("cert_pem", "key_pem"):
@@ -753,7 +755,7 @@ def self_test() -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Coletor local de XML fiscal para a plataforma Reforma Tributária")
+    parser = argparse.ArgumentParser(description="Coletor local de documentos fiscais")
     parser.add_argument("--version", action="version", version=f"fiscal-xml-collector {version()}")
     sub = parser.add_subparsers(dest="command", required=True)
     setup = sub.add_parser("configure", help="Criar configuração sem armazenar credenciais")

@@ -1,14 +1,14 @@
-# Deployer GUI e CLI
+# Implantação com interface gráfica
 
-Ferramenta local para preparar os modelos Docker Compose da plataforma. Runtime Python somente da biblioteca padrão; a distribuição Windows inclui dois executáveis portáteis, GUI e CLI. A GUI encontra o CLI na mesma pasta. O pacote precisa conter os dois arquivos juntos.
+Ferramenta local para preparar modelos Docker Compose na infraestrutura do cliente. O pacote Windows contém a interface gráfica e um executável de operação **interno**, usado pela interface. Extraia o ZIP inteiro, abra `fiscal-deployer-gui-win-x64.exe` e informe o namespace GHCR onde as imagens estão disponíveis. A marca pode ser configurada por instalação em um `branding.json` ao lado da interface, por exemplo `{"name":"Seu Escritório"}`. O padrão é "Gestão Fiscal". O executável interno não é um produto de linha de comando para o usuário final.
 
 ## Configuração
 
 Na raiz do repositório, execute:
 
 ```bash
-python tools/deployer/deployer.py preview --target docker --channel production
-python tools/deployer/deployer.py generate --target docker --channel production \
+python tools/deployer/deployer.py preview --target docker --channel production --owner sua-organizacao
+python tools/deployer/deployer.py generate --target docker --channel production --owner sua-organizacao \
   --output ./installation --admin-email admin@example.org
 python tools/deployer/deployer.py validate --directory ./installation
 ```
@@ -43,11 +43,11 @@ Requer Python 3.12 no ambiente de build, não na máquina que executará os `.ex
 python -m unittest discover -s tools/deployer -p "test_*.py" -v
 python -m pip install -r tools/deployer/requirements-build.txt
 python -m PyInstaller --clean --noconfirm --onefile --console `
-  --name reforma-tributaria-deployer-win-x64 --distpath dist/cli --workpath build/cli `
+  --name fiscal-deployer-worker-win-x64 --distpath dist/cli --workpath build/cli `
   --add-data "deploy;deploy" --add-data "VERSION;." tools/deployer/deployer.py
 python -m PyInstaller --clean --noconfirm --onefile --windowed `
-  --name reforma-tributaria-deployer-gui-win-x64 --distpath dist/gui --workpath build/gui `
+  --name fiscal-deployer-gui-win-x64 --distpath dist/gui --workpath build/gui `
   tools/deployer/gui.py
 ```
 
-Inclua os dois executáveis e este README no mesmo ZIP. Smoke do CLI: `version`, `list`, `generate --target docker --channel production --output <pasta> --admin-email admin@example.org`, `validate --directory <pasta>`. Smoke da GUI no Windows: `reforma-tributaria-deployer-gui-win-x64.exe --smoke-test`.
+Inclua os dois executáveis e este README no mesmo ZIP; publique apenas o pacote gráfico. Smoke interno: `version`, `list`, `generate --target docker --channel production --owner sua-organizacao --output <pasta> --admin-email admin@example.org`, `validate --directory <pasta>`. Smoke da GUI no Windows: `fiscal-deployer-gui-win-x64.exe --smoke-test`.

@@ -78,6 +78,8 @@ jobs:
           npm ci --no-audit --no-fund
           npm test
           npm run build
+      - name: Audit customer-facing web and self-hosted deployment
+        run: python3 scripts/audit_customer_surface.py --web-dist apps/web/dist --self-dir deploy/self
   containers:
     needs: [infrastructure, backend, frontend]
     runs-on: ubuntu-latest
@@ -93,3 +95,30 @@ jobs:
           docker buildx build --platform linux/amd64 -f infra/docker/web.Dockerfile \
             --build-arg NODE_BASE=node:22-alpine --build-arg NGINX_BASE=nginx:1.30-alpine \
             --build-arg APP_VERSION="$(cat VERSION)" .
+  self_hosted:
+    needs: [infrastructure, backend, frontend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: {persist-credentials: false}
+      - name: Build and boot the local SQLite installation
+        run: |
+          set -euo pipefail
+          printf '%s\n%s\n' 'ci-test-only-strong-password-2026' 'ci-test-only-strong-password-2026' | \
+            python3 deploy/self/init_secrets.py --project fiscal-ci --email admin@example.invalid
+          docker compose --env-file deploy/self/.env -f deploy/self/compose.yaml config -q
+          docker compose --env-file deploy/self/.env -f deploy/self/compose.yaml up -d --build --wait
+          curl --fail --silent --show-error http://127.0.0.1:48080/healthz
+          curl --fail --silent --show-error http://127.0.0.1:48080/api/v1/installation/branding \
+            | python3 -c 'import json,sys; assert json.load(sys.stdin)["version"] == 0'
+          curl --fail --silent --show-error -H 'Content-Type: application/json' \
+            --data '{"username":"admin@example.invalid","password":"ci-test-only-strong-password-2026"}' \
+            http://127.0.0.1:48080/api/v1/auth/login \
+            | python3 -c 'import json,sys; assert json.load(sys.stdin)["access_token"]'
+          python3 deploy/self/init_secrets.py --erase-bootstrap-password
+          docker compose --env-file deploy/self/.env -f deploy/self/compose.yaml up -d --wait
+          curl --fail --silent --show-error http://127.0.0.1:48080/healthz
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose --env-file deploy/self/.env -f deploy/self/compose.yaml logs --no-color --tail=100

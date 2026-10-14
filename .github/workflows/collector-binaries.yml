@@ -1,10 +1,7 @@
-name: XML collector binaries
+name: XML collector GUI packages
 on:
   pull_request:
-    paths:
-      - 'tools/collector/**'
-      - 'VERSION'
-      - '.github/workflows/collector-binaries.yml'
+    paths: ['tools/collector/**', 'scripts/verify_collector_assets.py', 'scripts/test_collector_release.py', 'VERSION', '.github/workflows/collector-binaries.yml']
   workflow_call:
     inputs:
       staging_tag:
@@ -17,40 +14,60 @@ permissions:
 jobs:
   linux:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     permissions: {contents: write}
     steps:
       - uses: actions/checkout@v4
         with: {persist-credentials: false}
       - uses: actions/setup-python@v5
         with: {python-version: '3.13'}
-      - name: Verify source and build Linux AMD64 binary
+      - name: Verify sources and build Linux x64 GUI and worker
         run: |
           set -euo pipefail
           test "$(uname -m)" = x86_64
           python scripts/version.py check
           python -m unittest discover -s tools/collector -p 'test_*.py' -v
           python -m unittest discover -s tools/collector/tests -p 'test_*.py' -v
-          python tools/collector/collector.py self-test --offline
+          python -m unittest discover -s tools/collector/windows -p 'test_*.py' -v
+          python tools/collector/worker.py self-test --offline
+          sudo apt-get update -qq
+          sudo apt-get install -y xvfb python3-tk
           python -m pip install -r tools/collector/requirements-build.txt
           python -m PyInstaller --clean --noconfirm --onefile --console \
-            --name fiscal-xml-collector-linux-amd64 --distpath dist/collector \
-            --add-data 'VERSION:.' --hidden-import sefaz_nfe tools/collector/collector.py
-      - name: Smoke the standalone binary outside the checkout
+            --name fiscal-xml-worker-linux-x64 --distpath dist/collector \
+            --add-data 'VERSION:.' --hidden-import sefaz_nfe tools/collector/worker.py
+          python -m PyInstaller --clean --noconfirm --onefile \
+            --name fiscal-xml-gui-linux-x64 --distpath dist/collector \
+            --add-data 'VERSION:.' tools/collector/gui.py
+      - name: Smoke Linux binaries and GUI window outside checkout
         run: |
           set -euo pipefail
-          file dist/collector/fiscal-xml-collector-linux-amd64 | grep -E 'ELF 64-bit.*x86-64'
+          file dist/collector/fiscal-xml-worker-linux-x64 | grep -E 'ELF 64-bit.*x86-64'
+          file dist/collector/fiscal-xml-gui-linux-x64 | grep -E 'ELF 64-bit.*x86-64'
           cd "$RUNNER_TEMP"
-          test "$("$GITHUB_WORKSPACE/dist/collector/fiscal-xml-collector-linux-amd64" --version)" = \
-            "fiscal-xml-collector $(cat "$GITHUB_WORKSPACE/VERSION")"
-          "$GITHUB_WORKSPACE/dist/collector/fiscal-xml-collector-linux-amd64" self-test --offline
-      - name: Write artifact checksum
+          test "$("$GITHUB_WORKSPACE/dist/collector/fiscal-xml-worker-linux-x64" --version)" = \
+            "fiscal-xml-worker $(cat "$GITHUB_WORKSPACE/VERSION")"
+          "$GITHUB_WORKSPACE/dist/collector/fiscal-xml-worker-linux-x64" self-test --offline
+          timeout 30 xvfb-run -a "$GITHUB_WORKSPACE/dist/collector/fiscal-xml-gui-linux-x64" \
+            --smoke-test --home "$RUNNER_TEMP/fiscal-gui-smoke"
+      - name: Package customer-facing GUI and service worker
         run: |
           set -euo pipefail
-          cd dist/collector
-          sha256sum fiscal-xml-collector-linux-amd64 > SHA256SUMS.txt
-          sha256sum -c SHA256SUMS.txt
-      - name: Stage verified Linux binary for publication
+          root=dist/collector/linux/fiscal-xml-collector
+          mkdir -p "$root"
+          install -m 0755 dist/collector/fiscal-xml-gui-linux-x64 "$root/"
+          install -m 0755 dist/collector/fiscal-xml-worker-linux-x64 "$root/"
+          install -m 0755 tools/collector/systemd/self-install.sh "$root/self-install.sh"
+          install -m 0755 tools/collector/systemd/self-uninstall.sh "$root/self-uninstall.sh"
+          install -m 0644 tools/collector/systemd/fiscal-xml-self.service "$root/fiscal-xml-self.service"
+          install -m 0644 tools/collector/systemd/README-self.md "$root/README.md"
+          tar -czf dist/collector/fiscal-xml-collector-gui-linux-x64.tar.gz \
+            -C dist/collector/linux fiscal-xml-collector
+          (cd dist/collector && sha256sum fiscal-xml-collector-gui-linux-x64.tar.gz > SHA256SUMS.txt)
+          mkdir -p dist/collector/verified-linux
+          cp dist/collector/fiscal-xml-collector-gui-linux-x64.tar.gz dist/collector/SHA256SUMS.txt dist/collector/verified-linux/
+          python3 scripts/verify_collector_assets.py --single linux dist/collector/verified-linux
+      - name: Stage verified Linux GUI package
         if: inputs.staging_tag != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -59,19 +76,19 @@ jobs:
           set -euo pipefail
           cp dist/collector/SHA256SUMS.txt dist/collector/SHA256SUMS-collector-linux.txt
           gh release upload "$STAGING_TAG" \
-            dist/collector/fiscal-xml-collector-linux-amd64 \
+            dist/collector/fiscal-xml-collector-gui-linux-x64.tar.gz \
             dist/collector/SHA256SUMS-collector-linux.txt \
             --clobber --repo "$GITHUB_REPOSITORY"
   windows:
     runs-on: windows-latest
-    timeout-minutes: 35
+    timeout-minutes: 55
     permissions: {contents: write}
     steps:
       - uses: actions/checkout@v4
         with: {persist-credentials: false}
       - uses: actions/setup-python@v5
         with: {python-version: '3.13'}
-      - name: Verify source and build Windows AMD64 binary
+      - name: Verify sources and build Windows x64 GUI and worker
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -82,41 +99,194 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'SEFAZ adapter tests failed' }
           python -m unittest discover -s tools/collector/tests -p 'test_*.py' -v
           if ($LASTEXITCODE -ne 0) { throw 'Collector tests failed' }
-          python tools/collector/collector.py self-test --offline
-          if ($LASTEXITCODE -ne 0) { throw 'Source smoke failed' }
+          python -m unittest discover -s tools/collector/windows -p 'test_*.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Installer brand validation tests failed' }
+          python tools/collector/worker.py self-test --offline
+          if ($LASTEXITCODE -ne 0) { throw 'Worker self-test failed' }
           python -m pip install -r tools/collector/requirements-build.txt
           if ($LASTEXITCODE -ne 0) { throw 'PyInstaller install failed' }
           python -m PyInstaller --clean --noconfirm --onefile --console `
-            --name fiscal-xml-collector-windows-amd64 --distpath dist/collector `
-            --add-data 'VERSION;.' --hidden-import sefaz_nfe tools/collector/collector.py
-          if ($LASTEXITCODE -ne 0) { throw 'Collector build failed' }
-      - name: Smoke the standalone binary outside the checkout and verify PE x64
+            --name fiscal-xml-worker-windows-x64 --distpath dist/collector `
+            --add-data 'VERSION;.' --hidden-import sefaz_nfe tools/collector/worker.py
+          if ($LASTEXITCODE -ne 0) { throw 'Worker build failed' }
+          python -m PyInstaller --clean --noconfirm --onefile --windowed --uac-admin `
+            --name fiscal-xml-gui-windows-x64 --distpath dist/collector `
+            --icon tools/collector/windows/collector.ico `
+            --add-data 'VERSION;.' tools/collector/gui.py
+          if ($LASTEXITCODE -ne 0) { throw 'GUI build failed' }
+      - name: Smoke Windows GUI and worker outside checkout
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $binary = (Resolve-Path 'dist/collector/fiscal-xml-collector-windows-amd64.exe').Path
-          $bytes = [IO.File]::ReadAllBytes($binary)
-          if ($bytes.Length -lt 512 -or $bytes[0] -ne 77 -or $bytes[1] -ne 90) { throw 'Invalid PE' }
-          $pe = [BitConverter]::ToInt32($bytes, 0x3c)
-          if ([BitConverter]::ToUInt16($bytes, $pe + 4) -ne 0x8664) { throw 'Not AMD64' }
+          foreach ($name in @('fiscal-xml-worker-windows-x64.exe', 'fiscal-xml-gui-windows-x64.exe')) {
+            $bytes = [IO.File]::ReadAllBytes((Resolve-Path "dist/collector/$name").Path)
+            if ($bytes.Length -lt 512 -or $bytes[0] -ne 77 -or $bytes[1] -ne 90) { throw "Invalid PE: $name" }
+            $offset = [BitConverter]::ToInt32($bytes, 0x3c)
+            if ([BitConverter]::ToUInt16($bytes, $offset + 4) -ne 0x8664) { throw "Not x64: $name" }
+          }
+          $worker = (Resolve-Path 'dist/collector/fiscal-xml-worker-windows-x64.exe').Path
           Push-Location $env:RUNNER_TEMP
           try {
-            $reportedVersion = & $binary --version
-            if ($LASTEXITCODE -ne 0) { throw 'Binary version smoke failed' }
-            if ($reportedVersion -ne "fiscal-xml-collector $((Get-Content "$env:GITHUB_WORKSPACE/VERSION" -Raw).Trim())") {
-              throw 'Embedded VERSION differs from canonical VERSION'
+            $reported = & $worker --version
+            if ($LASTEXITCODE -ne 0 -or $reported -ne "fiscal-xml-worker $((Get-Content "$env:GITHUB_WORKSPACE/VERSION" -Raw).Trim())") {
+              throw 'Worker VERSION mismatch'
             }
-            & $binary self-test --offline
-            if ($LASTEXITCODE -ne 0) { throw 'Binary offline self-test failed' }
+            & $worker self-test --offline
+            if ($LASTEXITCODE -ne 0) { throw 'Worker frozen self-test failed' }
+            $gui = Start-Process -FilePath (Join-Path $env:GITHUB_WORKSPACE 'dist/collector/fiscal-xml-gui-windows-x64.exe') `
+              -ArgumentList @('--smoke-test', '--home', (Join-Path $env:RUNNER_TEMP 'fiscal-gui-smoke')) -PassThru
+            if (-not $gui.WaitForExit(30000)) { $gui.Kill(); throw 'GUI smoke timed out' }
+            if ($gui.ExitCode -ne 0) { throw 'GUI frozen smoke failed' }
           } finally { Pop-Location }
-      - name: Write artifact checksum
+      - name: Obtain pinned WinSW and Inno Setup from official releases
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $file = 'fiscal-xml-collector-windows-amd64.exe'
+          $wrapper = 'dist/collector/FiscalXmlCollector.exe'
+          Invoke-WebRequest -Uri 'https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe' -OutFile $wrapper
+          $winSwExpected = '05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da'
+          if ((Get-FileHash -Algorithm SHA256 $wrapper).Hash.ToLowerInvariant() -ne $winSwExpected) { throw 'WinSW hash mismatch' }
+          $installer = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.3.exe'
+          Invoke-WebRequest -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' -OutFile $installer
+          $innoExpected = '9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732'
+          if ((Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant() -ne $innoExpected) { throw 'Inno Setup hash mismatch' }
+          $innoDir = Join-Path $env:RUNNER_TEMP 'InnoSetup'
+          $run = Start-Process -FilePath $installer -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$innoDir`"" -Wait -PassThru
+          if ($run.ExitCode -ne 0 -or -not (Test-Path (Join-Path $innoDir 'ISCC.exe'))) { throw 'Inno Setup installation failed' }
+      - name: Compile installer and prove silent install preserves data
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $compiler = Join-Path $env:RUNNER_TEMP 'InnoSetup/ISCC.exe'
+          $version = (Get-Content VERSION -Raw).Trim()
+          python tools/collector/windows/build_installer.py --source-root $env:GITHUB_WORKSPACE `
+            --compiler $compiler --version $version
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup build failed' }
+          $setup = (Resolve-Path 'dist/collector/fiscal-xml-collector-setup-windows-x64.exe').Path
+          $bytes = [IO.File]::ReadAllBytes($setup)
+          if ($bytes.Length -lt 512 -or $bytes[0] -ne 77 -or $bytes[1] -ne 90) { throw 'Installer is not PE' }
+          $installDir = Join-Path $env:RUNNER_TEMP 'FiscalCollectorSmoke'
+          $collectorHome = Join-Path $env:ProgramData 'FiscalXmlCollector'
+          $installLog = Join-Path $env:RUNNER_TEMP 'collector-first-install.log'
+          $run = Start-Process -FilePath $setup `
+            -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$installDir`" /LOG=`"$installLog`"" -Wait -PassThru
+          if ($run.ExitCode -ne 0) {
+            if (Test-Path -LiteralPath $installLog) { Get-Content -LiteralPath $installLog -Tail 100 | Write-Output }
+            $firstManager = Join-Path $installDir 'manage-service.ps1'
+            if (Test-Path -LiteralPath $firstManager) {
+              try {
+                & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $firstManager -Action Protect -Home $collectorHome 2>&1 |
+                  ForEach-Object { Write-Output "Protect diagnostic: $_" }
+                Write-Output "Protect diagnostic exit code: $LASTEXITCODE"
+              } catch {
+                Write-Output "Protect diagnostic exception: $_"
+              }
+            }
+            throw "Silent setup failed: $($run.ExitCode)"
+          }
+          foreach ($name in @('fiscal-xml-worker-windows-x64.exe', 'fiscal-xml-gui-windows-x64.exe', 'FiscalXmlCollector.exe', 'manage-service.ps1', 'LICENSE-WinSW.txt')) {
+            if (-not (Test-Path (Join-Path $installDir $name))) { throw "Missing installed $name" }
+          }
+          $manager = Join-Path $installDir 'manage-service.ps1'
+          $unsafe = Join-Path $env:RUNNER_TEMP 'UnsafeServiceHome'
+          New-Item -ItemType Directory -Path $unsafe -Force | Out-Null
+          $beforeAcl = (Get-Acl -LiteralPath $unsafe).Sddl
+          & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $manager -Action Protect -Home $unsafe 2>$null
+          if ($LASTEXITCODE -eq 0 -or (Get-Acl -LiteralPath $unsafe).Sddl -ne $beforeAcl) {
+            throw 'Unsafe Home was accepted or its ACL was changed'
+          }
+          $spool = Join-Path $collectorHome 'smoke-xml'
+          New-Item -ItemType Directory -Path $spool -Force | Out-Null
+          $env:FISCAL_SMOKE_HOME = $collectorHome
+          @'
+          import os, sys, uuid
+          from pathlib import Path
+          sys.path.insert(0, str(Path('tools/collector').resolve()))
+          import profiles
+          home = Path(os.environ['FISCAL_SMOKE_HOME'])
+          profiles.save_profile(home, company_id=str(uuid.UUID('12345678-1234-4234-9234-123456789abc')),
+              cnpj='00000000000191', name='Empresa de teste offline',
+              server_url='https://127.0.0.1:9', roots=[str(home / 'smoke-xml')],
+              token='token-sintetico-de-ci', poll_seconds=60)
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create synthetic company profile' }
+          & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $manager -Action Install -Home $collectorHome
+          if ($LASTEXITCODE -ne 0) { throw 'WinSW service installation failed' }
+          $service = Get-Service -Name FiscalXmlCollector -ErrorAction Stop
+          $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+          $state = Join-Path $collectorHome 'companies/12345678-1234-4234-9234-123456789abc/state/state.sqlite3'
+          for ($i = 0; $i -lt 30 -and -not (Test-Path -LiteralPath $state); $i++) { Start-Sleep -Seconds 1 }
+          if (-not (Test-Path -LiteralPath $state)) { throw 'Installed service did not create its SQLite state' }
+          foreach ($path in @($collectorHome, (Join-Path $collectorHome 'catalog.sqlite3'), (Join-Path $collectorHome 'companies/12345678-1234-4234-9234-123456789abc/token'))) {
+            $acl = Get-Acl -LiteralPath $path
+            if (-not $acl.AreAccessRulesProtected) { throw "Inherited private ACL: $path" }
+            foreach ($rule in $acl.Access) {
+              $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+              if ($sid -notin @('S-1-5-18','S-1-5-32-544')) { throw "Unexpected private ACL principal $sid on $path" }
+            }
+          }
+          $marker = Join-Path $collectorHome 'ci-preservation-check.txt'
+          Set-Content -LiteralPath $marker -Value 'keep the SQLite home' -Encoding ascii
+          $preUpgrade = (Get-Service -Name FiscalXmlCollector).Status
+          if ($preUpgrade -ne 'Running') {
+            $logs = Join-Path $collectorHome 'logs'
+            if (Test-Path -LiteralPath $logs) {
+              Get-ChildItem -LiteralPath $logs -File | ForEach-Object {
+                Write-Output "WinSW log: $($_.Name)"
+                Get-Content -LiteralPath $_.FullName -Tail 50 | Write-Output
+              }
+            }
+            throw "Service stopped before upgrade: $preUpgrade"
+          }
+          $upgradeLog = Join-Path $env:RUNNER_TEMP 'collector-upgrade.log'
+          $upgrade = Start-Process -FilePath $setup `
+            -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$installDir`" /LOG=`"$upgradeLog`"" -Wait -PassThru
+          try {
+            if ($upgrade.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $marker)) {
+              throw "Upgrade lost customer data or failed (setup exit $($upgrade.ExitCode))"
+            }
+            (Get-Service -Name FiscalXmlCollector).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+          } catch {
+            $upgradeFailure = $_
+            Write-Output "Service status after upgrade: $((Get-Service -Name FiscalXmlCollector).Status)"
+            if (Test-Path -LiteralPath $upgradeLog) { Get-Content -LiteralPath $upgradeLog -Tail 100 | Write-Output }
+            $logs = Join-Path $collectorHome 'logs'
+            if (Test-Path -LiteralPath $logs) {
+              Get-ChildItem -LiteralPath $logs -File | ForEach-Object {
+                Write-Output "WinSW log: $($_.Name)"
+                Get-Content -LiteralPath $_.FullName -Tail 50 | Write-Output
+              }
+            }
+            try {
+              & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $manager -Action Protect -Home $collectorHome 2>&1 |
+                ForEach-Object { Write-Output "Protect diagnostic: $_" }
+              Write-Output "Protect diagnostic exit code: $LASTEXITCODE"
+            } catch {
+              Write-Output "Protect diagnostic exception: $_"
+            }
+            throw $upgradeFailure
+          }
+          & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $manager -Action Stop -Home $collectorHome
+          if ($LASTEXITCODE -ne 0 -or (Get-Service -Name FiscalXmlCollector).Status -ne 'Stopped') { throw 'WinSW service stop failed' }
+          & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $manager -Action Start -Home $collectorHome
+          if ($LASTEXITCODE -ne 0) { throw 'WinSW service restart failed' }
+          (Get-Service -Name FiscalXmlCollector).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+          $run = Start-Process -FilePath (Join-Path $installDir 'unins000.exe') -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru
+          if ($run.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $marker) -or -not (Test-Path -LiteralPath $state)) { throw 'Uninstall lost customer data or failed' }
+          if (Get-Service -Name FiscalXmlCollector -ErrorAction SilentlyContinue) { throw 'Uninstall left a registered service' }
+          Remove-Item -LiteralPath $marker
+      - name: Write installer checksum
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $file = 'fiscal-xml-collector-setup-windows-x64.exe'
           $digest = (Get-FileHash -Algorithm SHA256 "dist/collector/$file").Hash.ToLowerInvariant()
           "$digest  $file" | Set-Content -Encoding ascii dist/collector/SHA256SUMS.txt
-      - name: Stage verified Windows binary for publication
+          New-Item -ItemType Directory -Force dist/collector/verified-windows | Out-Null
+          Copy-Item "dist/collector/$file",dist/collector/SHA256SUMS.txt dist/collector/verified-windows/
+          python scripts/verify_collector_assets.py --single windows dist/collector/verified-windows
+          if ($LASTEXITCODE -ne 0) { throw 'Installer checksum/package validation failed' }
+      - name: Stage verified Windows GUI installer
         if: inputs.staging_tag != ''
         shell: pwsh
         env:
@@ -126,7 +296,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Copy-Item dist/collector/SHA256SUMS.txt dist/collector/SHA256SUMS-collector-windows.txt
           gh release upload $env:STAGING_TAG `
-            dist/collector/fiscal-xml-collector-windows-amd64.exe `
+            dist/collector/fiscal-xml-collector-setup-windows-x64.exe `
             dist/collector/SHA256SUMS-collector-windows.txt `
             --clobber --repo $env:GITHUB_REPOSITORY
-          if ($LASTEXITCODE -ne 0) { throw 'Windows collector staging failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'Windows installer staging failed' }

@@ -1,7 +1,7 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import create_engine, pool
+from sqlalchemy import create_engine, event, pool
 
 from app.config import get_settings
 from app.models import Base
@@ -26,6 +26,16 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     engine = create_engine(migration_url(), poolclass=pool.NullPool)
+    if engine.url.get_backend_name() == "sqlite":
+        @event.listens_for(engine, "connect")
+        def sqlite_pragmas(connection, record):
+            cursor = connection.cursor()
+            try:
+                cursor.execute("PRAGMA busy_timeout=5000")
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.execute("PRAGMA journal_mode=WAL")
+            finally:
+                cursor.close()
     with engine.connect() as conn:
         context.configure(connection=conn, target_metadata=target_metadata,
                           compare_type=True)

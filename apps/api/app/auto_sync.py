@@ -44,6 +44,12 @@ async def schedule_due(settings: Settings | None = None) -> int:
             if base in seen_bases:
                 continue
             seen_bases.add(base)
+            if settings.self_hosted:
+                branches = await session.scalar(select(func.count()).select_from(Company).where(
+                    Company.organization_id == company.organization_id,
+                    Company.cnpj_base == base))
+                if branches != 1:
+                    continue  # A root-scoped receipt cannot belong to a chosen branch.
             scope = (Query.organization_id == company.organization_id,
                      Query.cnpj_base == base,
                      Query.environment == settings.cbs_auto_sync_environment)
