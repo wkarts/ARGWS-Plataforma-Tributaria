@@ -61,6 +61,7 @@ Filename: "{app}\fiscal-xml-gui-windows-x64.exe"; Description: "Abrir {#APP_DISP
 [Code]
 var
   ServiceWasRunning: Boolean;
+  PostInstallFailed: Boolean;
 
 function InitializeSetup(): Boolean;
 var
@@ -69,6 +70,7 @@ begin
   { Capture the prior state before Inno's close-applications pass can stop
     an in-use worker. PrepareToInstall may observe an already stopped service. }
   ServiceWasRunning := False;
+  PostInstallFailed := False;
   Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
     '-NoProfile -NonInteractive -Command "if ((Get-Service -Name FiscalXmlCollector -ErrorAction SilentlyContinue).Status -eq ''Running'') { exit 0 } else { exit 1 }"',
     '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
@@ -84,8 +86,10 @@ begin
     ExpandConstant('{app}\manage-service.ps1') + '" -Action ' + ActionName +
     ' -Home "' + ExpandConstant('{commonappdata}\FiscalXmlCollector') + '"';
   if (not Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-    Params, '', SW_HIDE, ewWaitUntilTerminated, ExitCode)) or (ExitCode <> 0) then
+    Params, '', SW_HIDE, ewWaitUntilTerminated, ExitCode)) or (ExitCode <> 0) then begin
+    Log('A operação ' + ActionName + ' do serviço retornou código ' + IntToStr(ExitCode));
     RaiseException('A operação ' + ActionName + ' do serviço falhou. Verifique o registro da instalação.');
+  end;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -104,10 +108,21 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then begin
-    { Fail installation if private storage could not be protected. }
-    RunManager('Protect');
-    if ServiceWasRunning then RunManager('Start');
+    { Inno logs exceptions from ssPostInstall yet may exit 0 in silent mode. }
+    try
+      RunManager('Protect');
+      if ServiceWasRunning then RunManager('Start');
+    except
+      PostInstallFailed := True;
+      RaiseException(GetExceptionMessage);
+    end;
   end;
+end;
+
+function GetCustomSetupExitCode(): Integer;
+begin
+  Result := 0;
+  if PostInstallFailed then Result := 4;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

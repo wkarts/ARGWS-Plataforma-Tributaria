@@ -227,10 +227,13 @@ jobs:
           $upgradeLog = Join-Path $env:RUNNER_TEMP 'collector-upgrade.log'
           $upgrade = Start-Process -FilePath $setup `
             -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$installDir`" /LOG=`"$upgradeLog`"" -Wait -PassThru
-          if ($upgrade.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $marker)) { throw 'Upgrade lost customer data or failed' }
           try {
+            if ($upgrade.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $marker)) {
+              throw "Upgrade lost customer data or failed (setup exit $($upgrade.ExitCode))"
+            }
             (Get-Service -Name FiscalXmlCollector).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
           } catch {
+            $upgradeFailure = $_
             Write-Output "Service status after upgrade: $((Get-Service -Name FiscalXmlCollector).Status)"
             if (Test-Path -LiteralPath $upgradeLog) { Get-Content -LiteralPath $upgradeLog -Tail 100 | Write-Output }
             $logs = Join-Path $collectorHome 'logs'
@@ -240,7 +243,14 @@ jobs:
                 Get-Content -LiteralPath $_.FullName -Tail 50 | Write-Output
               }
             }
-            throw
+            try {
+              & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $manager -Action Protect -Home $collectorHome 2>&1 |
+                ForEach-Object { Write-Output "Protect diagnostic: $_" }
+              Write-Output "Protect diagnostic exit code: $LASTEXITCODE"
+            } catch {
+              Write-Output "Protect diagnostic exception: $_"
+            }
+            throw $upgradeFailure
           }
           & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $manager -Action Stop -Home $collectorHome
           if ($LASTEXITCODE -ne 0 -or (Get-Service -Name FiscalXmlCollector).Status -ne 'Stopped') { throw 'WinSW service stop failed' }
