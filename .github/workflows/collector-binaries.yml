@@ -180,10 +180,10 @@ jobs:
           if ($LASTEXITCODE -eq 0 -or (Get-Acl -LiteralPath $unsafe).Sddl -ne $beforeAcl) {
             throw 'Unsafe Home was accepted or its ACL was changed'
           }
-          $home = Join-Path $env:ProgramData 'FiscalXmlCollector'
-          $spool = Join-Path $home 'smoke-xml'
+          $collectorHome = Join-Path $env:ProgramData 'FiscalXmlCollector'
+          $spool = Join-Path $collectorHome 'smoke-xml'
           New-Item -ItemType Directory -Path $spool -Force | Out-Null
-          $env:FISCAL_SMOKE_HOME = $home
+          $env:FISCAL_SMOKE_HOME = $collectorHome
           @'
           import os, sys, uuid
           from pathlib import Path
@@ -196,14 +196,14 @@ jobs:
               token='token-sintetico-de-ci', poll_seconds=60)
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'Could not create synthetic company profile' }
-          & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $manager -Action Install -Home $home
+          & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $manager -Action Install -Home $collectorHome
           if ($LASTEXITCODE -ne 0) { throw 'WinSW service installation failed' }
           $service = Get-Service -Name FiscalXmlCollector -ErrorAction Stop
           $service.WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
-          $state = Join-Path $home 'companies/12345678-1234-4234-9234-123456789abc/state/state.sqlite3'
+          $state = Join-Path $collectorHome 'companies/12345678-1234-4234-9234-123456789abc/state/state.sqlite3'
           for ($i = 0; $i -lt 30 -and -not (Test-Path -LiteralPath $state); $i++) { Start-Sleep -Seconds 1 }
           if (-not (Test-Path -LiteralPath $state)) { throw 'Installed service did not create its SQLite state' }
-          foreach ($path in @($home, (Join-Path $home 'catalog.sqlite3'), (Join-Path $home 'companies/12345678-1234-4234-9234-123456789abc/token'))) {
+          foreach ($path in @($collectorHome, (Join-Path $collectorHome 'catalog.sqlite3'), (Join-Path $collectorHome 'companies/12345678-1234-4234-9234-123456789abc/token'))) {
             $acl = Get-Acl -LiteralPath $path
             if (-not $acl.AreAccessRulesProtected) { throw "Inherited private ACL: $path" }
             foreach ($rule in $acl.Access) {
@@ -211,15 +211,15 @@ jobs:
               if ($sid -notin @('S-1-5-18','S-1-5-32-544')) { throw "Unexpected private ACL principal $sid on $path" }
             }
           }
-          $marker = Join-Path $home 'ci-preservation-check.txt'
+          $marker = Join-Path $collectorHome 'ci-preservation-check.txt'
           Set-Content -LiteralPath $marker -Value 'keep the SQLite home' -Encoding ascii
           $upgrade = Start-Process -FilePath $setup `
             -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=`"$installDir`"" -Wait -PassThru
           if ($upgrade.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $marker)) { throw 'Upgrade lost customer data or failed' }
           (Get-Service -Name FiscalXmlCollector).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
-          & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $manager -Action Stop -Home $home
+          & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $manager -Action Stop -Home $collectorHome
           if ($LASTEXITCODE -ne 0 -or (Get-Service -Name FiscalXmlCollector).Status -ne 'Stopped') { throw 'WinSW service stop failed' }
-          & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $manager -Action Start -Home $home
+          & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $manager -Action Start -Home $collectorHome
           if ($LASTEXITCODE -ne 0) { throw 'WinSW service restart failed' }
           (Get-Service -Name FiscalXmlCollector).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
           $run = Start-Process -FilePath (Join-Path $installDir 'unins000.exe') -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Wait -PassThru

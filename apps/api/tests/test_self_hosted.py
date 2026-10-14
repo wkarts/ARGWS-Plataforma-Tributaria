@@ -35,6 +35,47 @@ def test_installation_secret_generator_keeps_files_private(tmp_path, monkeypatch
     assert (tmp_path / "secrets" / "admin-password").read_text() == ""
 
 
+def test_root_entrypoint_stages_secrets_then_drops_privileges(tmp_path, monkeypatch):
+    script = API_ROOT.parents[1] / "deploy" / "self" / "prepare_secrets.py"
+    spec = importlib.util.spec_from_file_location("self_prepare_secrets", script)
+    entrypoint = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(entrypoint)
+    monkeypatch.setattr(entrypoint, "SECRET_DIR", tmp_path / "run" / "app-secrets")
+    signing = tmp_path / "signing-key"
+    password = tmp_path / "admin-password"
+    signing.write_text("secret-key-test-value\n")
+    password.write_text("one-time-password\n")
+    signing.chmod(0o600)
+    password.chmod(0o600)
+    monkeypatch.setenv("SECRET_KEY_FILE", str(signing))
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD_FILE", str(password))
+    events = []
+    monkeypatch.setattr(entrypoint.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(entrypoint.os, "chown", lambda *args: events.append(("chown", args[1:])))
+    monkeypatch.setattr(entrypoint.os, "fchown", lambda *args: events.append(("fchown", args[1:])))
+    monkeypatch.setattr(entrypoint.os, "setgroups", lambda groups: events.append(("groups", groups)))
+    monkeypatch.setattr(entrypoint.os, "setgid", lambda gid: events.append(("gid", gid)))
+    monkeypatch.setattr(entrypoint.os, "setuid", lambda uid: events.append(("uid", uid)))
+
+    class Executed(Exception):
+        pass
+
+    def capture_exec(program, args, environment):
+        events.append(("exec", program, args, dict(environment)))
+        raise Executed
+
+    monkeypatch.setattr(entrypoint.os, "execvpe", capture_exec)
+    import pytest
+    with pytest.raises(Executed):
+        entrypoint.main(["python", "-m", "app.self_setup"])
+    assert events[-4:-1] == [("groups", []), ("gid", 10001), ("uid", 10001)]
+    staged = [entrypoint.SECRET_DIR / "signing-key", entrypoint.SECRET_DIR / "admin-password"]
+    assert [path.read_text() for path in staged] == ["secret-key-test-value\n", "one-time-password\n"]
+    assert events[-1][3]["SECRET_KEY_FILE"] == str(staged[0])
+    assert events[-1][3]["BOOTSTRAP_ADMIN_PASSWORD_FILE"] == str(staged[1])
+    assert all(path.stat().st_mode & 0o077 == 0 for path in staged)
+
+
 def run_python(arguments: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     result = subprocess.run([sys.executable, *arguments], cwd=API_ROOT, env=env,
                             capture_output=True, text=True, timeout=40)

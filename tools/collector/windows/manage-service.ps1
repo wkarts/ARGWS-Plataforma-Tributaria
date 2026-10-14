@@ -2,7 +2,7 @@ param(
   [Parameter(Mandatory=$true)]
   [ValidateSet('Install','Start','Stop','Status','Uninstall','Protect')]
   [string]$Action,
-  [string]$Home = (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'FiscalXmlCollector'),
+  [Alias('Home')][string]$DataHome = (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'FiscalXmlCollector'),
   [string]$InstallDir = (Split-Path -Parent $PSCommandPath)
 )
 
@@ -23,20 +23,20 @@ function Assert-Administrator {
 }
 
 function Assert-Home {
-  if (-not [IO.Path]::IsPathRooted($Home)) { throw 'Home deve ser um caminho absoluto.' }
-  if ($Home -match '"|[\r\n]') { throw 'Home contém caracteres inválidos.' }
+  if (-not [IO.Path]::IsPathRooted($DataHome)) { throw 'Home deve ser um caminho absoluto.' }
+  if ($DataHome -match '"|[\r\n]') { throw 'Home contém caracteres inválidos.' }
   # A ação Protect reescreve ACLs recursivamente: jamais aceite uma árvore
   # selecionada pelo usuário, um diretório pai ou um caminho de sistema.
   $systemData = [Environment]::GetFolderPath('CommonApplicationData')
   $expected = [IO.Path]::GetFullPath((Join-Path $systemData 'FiscalXmlCollector')).TrimEnd('\','/')
-  $actual = [IO.Path]::GetFullPath($Home).TrimEnd('\','/')
+  $actual = [IO.Path]::GetFullPath($DataHome).TrimEnd('\','/')
   if ($actual -ine $expected) { throw 'O serviço só aceita o diretório dedicado em ProgramData\FiscalXmlCollector.' }
   $programDataItem = Get-Item -LiteralPath $systemData -Force
   if ($programDataItem.Attributes -band [IO.FileAttributes]::ReparsePoint) {
     throw 'ProgramData não pode ser um link ou junction.'
   }
-  if (Test-Path -LiteralPath $Home) {
-    $item = Get-Item -LiteralPath $Home -Force
+  if (Test-Path -LiteralPath $DataHome) {
+    $item = Get-Item -LiteralPath $DataHome -Force
     if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
       throw 'Home não pode ser arquivo, link ou junction.'
     }
@@ -68,16 +68,16 @@ function Set-PrivateAcl([string]$Path, [bool]$Directory) {
 function Protect-Home {
   Assert-Administrator
   Assert-Home
-  New-Item -ItemType Directory -Path $Home -Force | Out-Null
+  New-Item -ItemType Directory -Path $DataHome -Force | Out-Null
   # Preserve the existing SQLite, profiles and XML spool on upgrades; limit access in place.
   # Faça a verificação de links antes de alterar qualquer ACL do estado.
-  $items = @(Get-ChildItem -LiteralPath $Home -Force -Recurse -ErrorAction Stop)
+  $items = @(Get-ChildItem -LiteralPath $DataHome -Force -Recurse -ErrorAction Stop)
   foreach ($item in $items) {
     if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
       throw "Link ou junction dentro do estado privado: $($item.FullName)"
     }
   }
-  Set-PrivateAcl $Home $true
+  Set-PrivateAcl $DataHome $true
   $items | ForEach-Object {
     Set-PrivateAcl $_.FullName $_.PSIsContainer
   }
@@ -96,7 +96,7 @@ function Invoke-Wrapper([string]$Command) {
 Assert-Home
 if ($Action -eq 'Status') {
   $service = Get-InstalledService
-  [pscustomobject]@{ installed = ($null -ne $service); status = $(if ($service) { "$($service.Status)" } else { 'NotInstalled' }); service_id = $serviceId; home = $Home } |
+  [pscustomobject]@{ installed = ($null -ne $service); status = $(if ($service) { "$($service.Status)" } else { 'NotInstalled' }); service_id = $serviceId; home = $DataHome } |
     ConvertTo-Json -Compress
   exit 0
 }
@@ -112,13 +112,13 @@ switch ($Action) {
     $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $wrapper).Hash.ToLowerInvariant()
     if ($actualHash -ne $winSwHash) { throw 'Hash do WinSW diverge da versão verificada.' }
     Protect-Home
-    $profiles = @(Get-ChildItem -LiteralPath (Join-Path $Home 'companies') -Directory -ErrorAction SilentlyContinue |
+    $profiles = @(Get-ChildItem -LiteralPath (Join-Path $DataHome 'companies') -Directory -ErrorAction SilentlyContinue |
       Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'config.json') -PathType Leaf })
     if ($profiles.Count -eq 0) { throw 'Cadastre ao menos uma empresa na interface antes de instalar o serviço.' }
-    & $worker --home $Home check
+    & $worker --home $DataHome check
     if ($LASTEXITCODE -ne 0) { throw 'Validação offline do worker falhou; serviço não instalado.' }
     $displayName = 'Fiscal XML Collector'
-    $brandFile = Join-Path $Home 'branding.json'
+    $brandFile = Join-Path $DataHome 'branding.json'
     if (Test-Path -LiteralPath $brandFile -PathType Leaf) {
       if ((Get-Item -LiteralPath $brandFile -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
         throw 'Arquivo de marca não pode ser link.'
@@ -135,10 +135,10 @@ switch ($Action) {
       name = $displayName
       description = 'Coleta fiscal local por empresas configuradas neste computador'
       executable = $worker
-      arguments = ('--home "{0}" serve' -f $Home)
+      arguments = ('--home "{0}" serve' -f $DataHome)
       workingdirectory = $InstallDir
       startmode = 'Automatic'
-      logpath = (Join-Path $Home 'logs')
+      logpath = (Join-Path $DataHome 'logs')
     }
     New-Item -ItemType Directory -Path $entries.logpath -Force | Out-Null
     Set-PrivateAcl $entries.logpath $true
