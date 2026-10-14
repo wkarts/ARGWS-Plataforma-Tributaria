@@ -17,6 +17,7 @@ SECRET_FILES = {
     "SECRET_KEY_FILE": "signing-key",
     "BOOTSTRAP_ADMIN_PASSWORD_FILE": "admin-password",
 }
+OPTIONAL_SECRET_FILES = {"CBS_CLIENT_SECRET_FILE": "cbs-client-secret"}
 MAX_SECRET_BYTES = 4096
 
 
@@ -49,6 +50,12 @@ def main(command: list[str]) -> None:
         target = SECRET_DIR / name
         stage_secret(Path(source), target)
         os.environ[variable] = str(target)
+    for variable, name in OPTIONAL_SECRET_FILES.items():
+        source = os.environ.get(variable)
+        if source:
+            target = SECRET_DIR / name
+            stage_secret(Path(source), target)
+            os.environ[variable] = str(target)
     os.setgroups([])
     os.setgid(APP_UID)
     os.setuid(APP_UID)

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import tempfile
 
 
 HERE = Path(__file__).resolve().parent
@@ -25,9 +26,37 @@ def main() -> None:
     parser.add_argument("--email", help="E-mail do primeiro administrador")
     parser.add_argument("--erase-bootstrap-password", action="store_true",
                         help="Esvaziar o segredo inicial após confirmar o primeiro login")
+    parser.add_argument("--set-cbs-client-secret", action="store_true",
+                        help="Gravar ou girar o segredo OAuth CBS sem expô-lo no shell")
     args = parser.parse_args()
     secrets_dir = HERE / "secrets"
     password_file = secrets_dir / "admin-password"
+
+    if args.set_cbs_client_secret:
+        if args.erase_bootstrap_password:
+            parser.error("Escolha uma operação por vez")
+        if not secrets_dir.is_dir() or secrets_dir.is_symlink():
+            parser.error("Inicialize a instalação antes de configurar CBS")
+        secret = getpass.getpass("Client Secret CBS da matriz: ")
+        if not 8 <= len(secret) <= 4000 or "\n" in secret or "\r" in secret:
+            parser.error("Client Secret CBS inválido")
+        if secret != getpass.getpass("Repita o Client Secret CBS: "):
+            parser.error("Os segredos não conferem")
+        target = secrets_dir / "cbs-client-secret"
+        if target.is_symlink():
+            parser.error("O destino não pode ser um link simbólico")
+        descriptor, temporary = tempfile.mkstemp(prefix=".cbs-secret-", dir=secrets_dir)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(secret + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, target)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+        print("Segredo CBS salvo localmente. Reinicie api e cbs-worker para aplicar a rotação.")
+        return
 
     if args.erase_bootstrap_password:
         if not password_file.is_file() or password_file.is_symlink():

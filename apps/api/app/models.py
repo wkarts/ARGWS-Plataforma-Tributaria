@@ -69,6 +69,15 @@ class AuthAttempt(Base):
     window_end: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
 
 
+class OAuthTokenBudget(Base):
+    """Durable local issuance budget; access tokens themselves stay in memory."""
+
+    __tablename__ = "oauth_token_budgets"
+    credential_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    issued: Mapped[int] = mapped_column(Integer, nullable=False)
+    window_end: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+
 class Company(Base):
     __tablename__ = "companies"
     __table_args__ = (UniqueConstraint("organization_id", "cnpj", name="uq_company_org_cnpj"),)

@@ -43,7 +43,7 @@ app.include_router(branding_router)
 
 def capabilities() -> dict:
     s = get_settings()
-    if s.self_hosted or s.provider_mode == "disabled":
+    if s.provider_mode == "disabled":
         return {
             "provider_mode": "disabled", "environments": [],
             "resources": {name: {"enabled": False,
@@ -258,6 +258,12 @@ async def create_query(body: QueryIn, idempotency_key: str = Header(min_length=8
             raise HTTPException(409, "Idempotency-Key reutilizada com payload diferente")
         return query_out(existing)
     check_capability(body, user.organization_id, company.cnpj_base)
+    if get_settings().self_hosted and body.environment != "fixture":
+        branches = await session.scalar(select(func.count()).select_from(Company).where(
+            Company.organization_id == user.organization_id,
+            Company.cnpj_base == company.cnpj_base))
+        if branches != 1:
+            raise HTTPException(409, "CBS consulta a raiz CNPJ; concilie filiais antes da consulta oficial")
     active = await session.scalar(select(Query.id).where(Query.cnpj_base == company.cnpj_base,
         Query.organization_id == user.organization_id,
         Query.environment == body.environment,

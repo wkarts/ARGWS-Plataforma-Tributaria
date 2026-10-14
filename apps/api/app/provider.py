@@ -7,12 +7,20 @@ import ipaddress
 import json
 import socket
 import secrets
+import time
 from urllib.parse import quote, urlsplit
 
 import httpx
 from redis.asyncio import Redis
+from sqlalchemy import text
 
 from app.config import Settings
+
+
+# The self runner is a singleton. Never persist bearer tokens in SQLite: only
+# its hourly issuance budget survives a crash or restart.
+_local_tokens: dict[str, tuple[str, float]] = {}
+_local_token_lock = asyncio.Lock()
 
 
 class ProviderError(Exception):
@@ -51,7 +59,9 @@ class ReceitaProvider:
     def __init__(self, settings: Settings):
         self.settings = settings
         identity = f"{settings.cbs_token_url}:{settings.cbs_client_id}"
-        self.cache_key = "receita:oauth:" + sha256(identity.encode()).hexdigest()
+        self.budget_key = "receita:oauth-budget:" + sha256(identity.encode()).hexdigest()
+        self.cache_key = "receita:oauth:" + sha256(
+            f"{identity}:{settings.cbs_client_secret}".encode()).hexdigest()
 
     def redis(self) -> Redis:
         return Redis(host=self.settings.redis_host, port=6379,
@@ -71,8 +81,75 @@ class ReceitaProvider:
         # The operator supplies the actual Receita Integra token URL. Client
         # credentials are never echoed in errors or logs.
         parsed = urlsplit(self.settings.cbs_token_url)
-        if parsed.scheme != "https" or parsed.hostname != "api.receitafederal.gov.br":
+        if (parsed.scheme != "https" or parsed.hostname != "api.receitafederal.gov.br"
+                or parsed.username or parsed.password or parsed.port not in {None, 443}):
             raise ProviderError("Endpoint OAuth fora do domínio permitido")
+        if self.settings.self_hosted:
+            return await self._local_token()
+        return await self._redis_token()
+
+    async def _request_token(self) -> tuple[str, int]:
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+                response = await client.post(
+                    self.settings.cbs_token_url,
+                    data={"grant_type": "client_credentials"},
+                    auth=(self.settings.cbs_client_id, self.settings.cbs_client_secret),
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, dict):
+                    raise ProviderError("Resposta OAuth inválida", retryable=True)
+                token = payload.get("access_token")
+                if not isinstance(token, str) or not token:
+                    raise ProviderError("Resposta OAuth sem access_token", retryable=True)
+                ttl = max(1, min(int(payload.get("expires_in", 3600)) - 120, 3300))
+                return token, ttl
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError, TypeError):
+            raise ProviderError("Falha na autenticação Receita Integra", retryable=True) from None
+
+    async def _reserve_local_issuance(self) -> None:
+        # The SQLite UPSERT serializes the budget across even an accidental
+        # second process. The worker's file lock separately excludes two
+        # processors opening the same remote CBS request.
+        from app.db import Session
+
+        current = int(time.time())
+        try:
+            async with Session() as session:
+                result = await session.execute(text("""
+                    INSERT INTO oauth_token_budgets (credential_hash, issued, window_end)
+                    VALUES (:credential_hash, 1, :expires)
+                    ON CONFLICT(credential_hash) DO UPDATE SET
+                      issued = CASE WHEN oauth_token_budgets.window_end <= :current
+                                    THEN 1 ELSE oauth_token_budgets.issued + 1 END,
+                      window_end = CASE WHEN oauth_token_budgets.window_end <= :current
+                                        THEN :expires ELSE oauth_token_budgets.window_end END
+                    WHERE oauth_token_budgets.window_end <= :current
+                       OR oauth_token_budgets.issued < 2
+                    RETURNING issued
+                """), {"credential_hash": self.budget_key.rsplit(":", 1)[-1],
+                         "current": current, "expires": current + 3600})
+                allowed = result.scalar_one_or_none() is not None
+                await session.commit()
+            if not allowed:
+                raise ProviderError("Limite horário de tokens atingido", retryable=True)
+        except ProviderError:
+            raise
+        except Exception:
+            raise ProviderError("Orçamento OAuth local indisponível", retryable=True) from None
+
+    async def _local_token(self) -> str:
+        async with _local_token_lock:
+            cached = _local_tokens.get(self.cache_key)
+            if cached and cached[1] > time.monotonic():
+                return cached[0]
+            await self._reserve_local_issuance()
+            token, ttl = await self._request_token()
+            _local_tokens[self.cache_key] = (token, time.monotonic() + ttl)
+            return token
+
+    async def _redis_token(self) -> str:
         redis = self.redis()
         lock_key = self.cache_key + ":lock"
         try:
@@ -88,25 +165,14 @@ class ReceitaProvider:
                         if cached:
                             return cached
                         # One issuance budget shared by all worker processes.
-                        issued = await redis.incr(self.cache_key + ":issued")
+                        issued = await redis.incr(self.budget_key + ":issued")
                         if issued == 1:
-                            await redis.expire(self.cache_key + ":issued", 3600)
+                            await redis.expire(self.budget_key + ":issued", 3600)
                         if issued > 2:
                             raise ProviderError("Limite horário de tokens atingido", retryable=True)
-                        async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
-                            response = await client.post(
-                                self.settings.cbs_token_url,
-                                data={"grant_type": "client_credentials"},
-                                auth=(self.settings.cbs_client_id, self.settings.cbs_client_secret),
-                            )
-                            response.raise_for_status()
-                            payload = response.json()
-                            token = payload.get("access_token")
-                            if not isinstance(token, str) or not token:
-                                raise ProviderError("Resposta OAuth sem access_token", retryable=True)
-                            ttl = max(1, min(int(payload.get("expires_in", 3600)) - 120, 3300))
-                            await redis.set(self.cache_key, token, ex=ttl)
-                            return token
+                        token, ttl = await self._request_token()
+                        await redis.set(self.cache_key, token, ex=ttl)
+                        return token
                     finally:
                         # Do not release a lock replaced by another worker.
                         await redis.eval("if redis.call('get',KEYS[1]) == ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end", 1, lock_key, owner)
@@ -115,8 +181,6 @@ class ReceitaProvider:
                 if cached:
                     return cached
             raise ProviderError("Timeout aguardando token compartilhado", retryable=True)
-        except (httpx.RequestError, httpx.HTTPStatusError, ValueError, TypeError) as exc:
-            raise ProviderError("Falha na autenticação Receita Integra", retryable=True) from None
         except ProviderError:
             raise
         except Exception:
@@ -132,12 +196,17 @@ class ReceitaProvider:
                 response = await client.request(method, url, headers=headers, **kwargs)
             if response.status_code != 401 or attempt:
                 return response
-            redis = self.redis()
-            try:
-                await redis.eval("if redis.call('get',KEYS[1]) == ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end",
-                                 1, self.cache_key, token)
-            finally:
-                await redis.aclose()
+            if self.settings.self_hosted:
+                async with _local_token_lock:
+                    if _local_tokens.get(self.cache_key, (None,))[0] == token:
+                        _local_tokens.pop(self.cache_key, None)
+            else:
+                redis = self.redis()
+                try:
+                    await redis.eval("if redis.call('get',KEYS[1]) == ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end",
+                                     1, self.cache_key, token)
+                finally:
+                    await redis.aclose()
             token = await self.token()
         return response
 
