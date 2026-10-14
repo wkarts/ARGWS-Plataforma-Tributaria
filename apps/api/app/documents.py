@@ -161,6 +161,7 @@ async def ingest_document(request: Request, response: Response,
         Company.organization_id == organization_id))
     if company is None:
         raise HTTPException(404, "Empresa não encontrada")
+    owned_company_id = company.id
     if not re.fullmatch(r"[a-fA-F0-9]{64}", x_content_sha256):
         raise HTTPException(422, "X-Content-SHA256 inválido")
     data = await _read_xml(request)
@@ -214,7 +215,7 @@ async def ingest_document(request: Request, response: Response,
         await session.rollback()
         existing = await session.scalar(select(FiscalDocument).where(
             FiscalDocument.organization_id == organization_id,
-            FiscalDocument.company_id == company.id, FiscalDocument.sha256 == digest))
+            FiscalDocument.company_id == owned_company_id, FiscalDocument.sha256 == digest))
         if existing is not None:
             response.status_code = 200
             return document_out(existing) | {"duplicate": True}

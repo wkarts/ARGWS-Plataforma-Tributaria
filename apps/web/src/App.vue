@@ -3,7 +3,9 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import AppIcon from "./components/AppIcon.vue";
 import FiscalWorkspace from "./components/FiscalWorkspace.vue";
 import FinanceControls from "./components/FinanceControls.vue";
+import BrandingSettings from "./components/BrandingSettings.vue";
 import { ApiClient, ApiError } from "./api.ts";
+import { applyBrand, DEFAULT_BRAND } from "./branding.ts";
 import {
   canQuery,
   classifyCredit,
@@ -22,13 +24,14 @@ import type {
   Coverage,
   Environment,
   FiscalRecord,
+  InstallationBrand,
   Query,
   Resource,
   User,
 } from "./types.ts";
 import { RESOURCES } from "./types.ts";
 
-type View = "overview" | "queries" | "credits" | "movements" | "audit" | "documents" | "agents" | "reconciliation" | "finance_controls";
+type View = "overview" | "queries" | "credits" | "movements" | "audit" | "documents" | "agents" | "reconciliation" | "finance_controls" | "identity";
 type CreditView = "government_reported" | "presumed_stock" | "unclassified";
 const navigation: { id: View; label: string; icon: string; hint: string }[] = [
   { id: "overview", label: "Visão geral", icon: "overview", hint: "Operação" },
@@ -47,9 +50,10 @@ const navigation: { id: View; label: string; icon: string; hint: string }[] = [
     hint: "Fontes e retornos",
   },
   { id: "documents", label: "XML fiscais", icon: "audit", hint: "Documentos recebidos" },
-  { id: "reconciliation", label: "Conciliação", icon: "search", hint: "Conferência" },
+  { id: "reconciliation", label: "Apuração assistida · prévia", icon: "search", hint: "Conferência" },
   { id: "finance_controls", label: "Controles manuais", icon: "credits", hint: "Estoque e parcelas" },
   { id: "agents", label: "Agentes locais", icon: "shield", hint: "Coleta no cliente" },
+  { id: "identity", label: "Identidade visual", icon: "shield", hint: "Instalação" },
 ];
 const environmentLabels: Record<Environment, string> = {
   fixture: "Fixture · simulação",
@@ -57,7 +61,11 @@ const environmentLabels: Record<Environment, string> = {
   production: "Produção",
 };
 
-const token = ref<string | null>(sessionStorage.getItem("rt_access_token"));
+const token = ref<string | null>(sessionStorage.getItem("access_token"));
+const initialBrand = window.__INSTALLATION_BRAND__ || DEFAULT_BRAND;
+const brand = ref<InstallationBrand>(initialBrand);
+applyBrand(initialBrand);
+const brandInitials = computed(() => brand.value.short_name.trim().slice(0, 2).toLocaleUpperCase("pt-BR"));
 const username = ref("");
 const password = ref("");
 const user = ref<User | null>(null);
@@ -112,6 +120,19 @@ const updateOnline = () => {
   online.value = navigator.onLine;
 };
 
+async function loadBrand() {
+  try {
+    updateBrand(await api.installationBrand());
+  } catch {
+    // A identidade neutra continua disponível quando a API está offline.
+  }
+}
+
+function updateBrand(value: InstallationBrand) {
+  brand.value = value;
+  applyBrand(value);
+}
+
 const api = new ApiClient(
   () => token.value,
   () => logout("Sua sessão expirou. Entre novamente."),
@@ -161,8 +182,8 @@ function message(error: unknown): string {
 }
 function logout(reason?: string) {
   token.value = null;
-  sessionStorage.removeItem("rt_access_token");
-  sessionStorage.removeItem("rt_company_id");
+  sessionStorage.removeItem("access_token");
+  sessionStorage.removeItem("company_id");
   user.value = null;
   capabilities.value = null;
   coverage.value = null;
@@ -187,7 +208,7 @@ async function login() {
     if (!result.access_token || result.token_type.toLowerCase() !== "bearer")
       throw new Error("A API retornou uma sessão inválida.");
     token.value = result.access_token;
-    sessionStorage.setItem("rt_access_token", result.access_token);
+    sessionStorage.setItem("access_token", result.access_token);
     password.value = "";
     await bootstrap();
   } catch (error) {
@@ -210,7 +231,7 @@ async function bootstrap() {
     companies.value = response.items;
     if (!cap.environments.includes(environment.value))
       environment.value = cap.environments[0] || "fixture";
-    const remembered = sessionStorage.getItem("rt_company_id");
+    const remembered = sessionStorage.getItem("company_id");
     companyId.value =
       companies.value.find((item) => item.id === remembered)?.id ||
       companies.value[0]?.id ||
@@ -322,7 +343,7 @@ async function loadMoreQueries() {
 }
 
 async function changeCompany() {
-  sessionStorage.setItem("rt_company_id", companyId.value);
+  sessionStorage.setItem("company_id", companyId.value);
   loadGeneration++;
   queries.value = [];
   records.value = [];
@@ -536,6 +557,7 @@ watch(environment, () => {
   void loadCoverage();
 });
 onMounted(() => {
+  if (!window.__INSTALLATION_BRAND__) void loadBrand();
   if (token.value) void bootstrap();
   window.addEventListener("online", updateOnline);
   window.addEventListener("offline", updateOnline);
@@ -560,8 +582,9 @@ onBeforeUnmount(() => {
 <template>
   <div v-if="!token" class="auth-screen">
     <div class="auth-brand">
-      <div class="brand-mark">RT<span class="brand-dot"></span></div>
-      <span>Reforma Tributária</span>
+      <img v-if="brand.logo_url" class="brand-logo" :src="brand.logo_url" alt="" />
+      <div v-else class="brand-mark">{{ brandInitials }}<span class="brand-dot"></span></div>
+      <span>{{ brand.display_name }}</span>
     </div>
     <div class="auth-grid">
       <section class="auth-intro">
@@ -633,15 +656,17 @@ onBeforeUnmount(() => {
     ></div>
     <aside class="sidebar" :class="{ 'sidebar-open': mobileMenu }">
       <div class="sidebar-brand">
-        <div class="brand-mark">RT<span class="brand-dot"></span></div>
+        <img v-if="brand.logo_url" class="brand-logo" :src="brand.logo_url" alt="" />
+        <div v-else class="brand-mark">{{ brandInitials }}<span class="brand-dot"></span></div>
         <div class="brand-title">
-          <strong>Reforma<br />Tributária</strong><small>CONSOLE FISCAL</small>
+          <strong>{{ brand.short_name }}</strong><small>CONSOLE FISCAL</small>
         </div>
       </div>
       <div class="sidebar-section-label">PLATAFORMA</div>
       <nav aria-label="Navegação principal">
         <button
           v-for="item in navigation"
+          v-show="item.id !== 'identity' || isAdmin()"
           :key="item.id"
           class="nav-item"
           :class="{ active: view === item.id }"
@@ -782,11 +807,14 @@ onBeforeUnmount(() => {
               <p v-else-if="view === 'finance_controls'">
                 Registre evidências em rascunho e parcelas comerciais sem alterar a apuração oficial.
               </p>
+              <p v-else-if="view === 'identity'">
+                Configure a marca pública desta instalação, independentemente das empresas atendidas.
+              </p>
               <p v-else>
                 Documentos, proveniência e integridade dos retornos consultados.
               </p>
             </div>
-            <div v-if="companyId" class="heading-action">
+            <div v-if="companyId && view !== 'identity'" class="heading-action">
               <button
                 class="btn secondary"
                 :disabled="loading"
@@ -799,7 +827,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <div class="company-toolbar">
+          <div v-if="view !== 'identity'" class="company-toolbar">
             <div class="company-symbol">
               <AppIcon name="building" :size="21" />
             </div>
@@ -841,7 +869,7 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <form
-            v-if="showCompanyForm"
+            v-if="showCompanyForm && view !== 'identity'"
             class="company-form surface"
             @submit.prevent="addCompany"
           >
@@ -881,7 +909,13 @@ onBeforeUnmount(() => {
             </button>
           </form>
 
-          <section v-if="!companyId" class="surface empty-state">
+          <BrandingSettings
+            v-if="view === 'identity' && isAdmin()"
+            :api="api"
+            :brand="brand"
+            @updated="updateBrand"
+          />
+          <section v-else-if="!companyId" class="surface empty-state">
             <div class="empty-icon"><AppIcon name="building" :size="28" /></div>
             <h2>Comece pela empresa</h2>
             <p>
@@ -1897,7 +1931,7 @@ onBeforeUnmount(() => {
             :admin="isAdmin()"
             :refresh-trigger="workspaceRefresh"
           />
-          <div v-if="companyId" class="page-footer">
+          <div v-if="companyId && view !== 'identity'" class="page-footer">
             <span
               >Os resultados refletem apenas os dados recebidos pela API e a
               página carregada.</span

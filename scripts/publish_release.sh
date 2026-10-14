@@ -100,9 +100,18 @@ if [[ "$CHANNEL" == develop ]]; then
   else
     status=$?
     [[ "$status" -eq 1 ]] || exit "$status"
-    gh release create pre-release --target "$GITHUB_SHA" --title "Develop $VERSION" \
-      --notes "Build contínuo develop em $GITHUB_SHA" --prerelease --draft --latest=false
+    gh release create pre-release --target "$GITHUB_SHA" --title "Prévia $VERSION" \
+      --notes "Versão de prévia do commit $GITHUB_SHA. Confira os checksums dos pacotes." --prerelease --draft --latest=false
   fi
+  # A prévia é móvel; versões anteriores podem ter assets com outros nomes.
+  # Limpe-os enquanto a release ainda está em draft, antes do novo manifesto.
+  remote_assets="$(gh release view pre-release --json assets --jq '.assets[].name' --repo "$GITHUB_REPOSITORY")"
+  while IFS= read -r old_asset; do
+    [[ -n "$old_asset" ]] || continue
+    if [[ ! -f "$files/$old_asset" ]]; then
+      gh release delete-asset pre-release "$old_asset" --yes --repo "$GITHUB_REPOSITORY"
+    fi
+  done <<< "$remote_assets"
   gh release upload pre-release "$files"/* --clobber
 
   verified="$(mktemp -d)"
@@ -139,7 +148,7 @@ PY
       -f ref=refs/tags/pre-release -f sha="$GITHUB_SHA" >/dev/null
   fi
   [[ "$(ref_sha pre-release)" == "$GITHUB_SHA" ]]
-  gh release edit pre-release --title "Develop $VERSION" --notes "Build contínuo develop em $GITHUB_SHA" \
+  gh release edit pre-release --title "Prévia $VERSION" --notes "Versão de prévia do commit $GITHUB_SHA. Confira os checksums dos pacotes." \
     --prerelease --draft=false --latest=false
   exit 0
 fi
@@ -224,7 +233,7 @@ else
   status=$?
   [[ "$status" -eq 1 ]] || exit "$status"
   gh release create "$tag" --target "$GITHUB_SHA" --draft --latest=false \
-    --title "Reforma Tributária $tag" --notes "Release estável do commit $GITHUB_SHA. Confira SHA256SUMS.txt e IMAGES.txt."
+    --title "Gestão Fiscal $tag" --notes "Versão estável do commit $GITHUB_SHA. Confira SHA256SUMS.txt e IMAGES.txt."
 fi
 for path in "$files"/*; do
   name="${path##*/}"

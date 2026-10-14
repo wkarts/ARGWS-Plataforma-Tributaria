@@ -14,6 +14,68 @@ export interface User {
   role: string;
 }
 
+export interface InstallationBrand {
+  display_name: string;
+  short_name: string;
+  primary_color: string;
+  secondary_color: string;
+  logo_url: string | null;
+  version: number;
+}
+
+export interface InstallationBrandInput {
+  display_name: string;
+  short_name: string;
+  primary_color: string;
+  secondary_color: string;
+  version: number;
+  remove_logo?: boolean;
+}
+
+export interface AssistedPreview {
+  company_id: string;
+  period: string;
+  status: "preliminary_unvalidated";
+  basis: string;
+  coverage: {
+    local_xml_complete: false;
+    official_cbs_complete: false;
+    ibs_official_connected: false;
+    signature_cryptographically_verified: false;
+    official_receipts: number;
+    company_scope_complete: boolean;
+    unperioded_document_count: number;
+  };
+  totals: Array<{
+    tax: "CBS" | "IBS";
+    direction: "incoming" | "outgoing";
+    model: "55" | "65" | "57";
+    amount: string;
+    document_count: number;
+  }>;
+  summary: Record<"total" | "match" | "mismatch" | "missing" | "ambiguous" | "unknown", number>;
+  items: Array<{
+    document_key: string | null;
+    period: string | null;
+    resource: string | null;
+    status: string;
+    reason: string | null;
+    source_amount: string | null;
+    source_ibs_amount: string | null;
+    official_amount: string | null;
+    credit_to_appropriate: string | null;
+    credit_appropriated: string | null;
+    credit_used: string | null;
+    document_ids: string[];
+    record_ids: string[];
+    source_sha256?: string | null;
+    model?: string | null;
+    source_signature_present?: boolean | null;
+    source_authorization_status?: string | null;
+  }>;
+  issues: Array<{ code: string; document_key: string | null; document_ids: string[]; record_ids: string[] }>;
+}
+
 export interface Company {
   id: string;
   name: string;

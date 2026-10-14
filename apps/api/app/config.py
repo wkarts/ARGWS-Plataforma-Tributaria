@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from urllib.parse import quote
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    deployment_mode: str = "central"
+    self_data_dir: str = "./data"
+
     postgres_host: str = "localhost"
     postgres_port: int = 5432
-    postgres_db: str = "reforma"
-    postgres_user: str = "reforma"
+    postgres_db: str = "fiscal"
+    postgres_user: str = "fiscal"
     postgres_password: str = ""
     database_url_override: str = ""
     rabbitmq_host: str = "localhost"
@@ -27,8 +32,10 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
     s3_use_ssl: bool = False
     secret_key: str = ""
+    secret_key_file: str = ""
     bootstrap_admin_email: str = ""
     bootstrap_admin_password: str = ""
+    bootstrap_admin_password_file: str = ""
     provider_mode: str = "fixture"
     cbs_restricted_enabled: bool = False
     cbs_production_enabled: bool = False
@@ -45,8 +52,20 @@ class Settings(BaseSettings):
     cbs_auto_sync_environment: str = "restricted"
     cbs_auto_sync_resources: str = "debitos,creditos"
 
+    @model_validator(mode="after")
+    def resolve_secret_files(self) -> "Settings":
+        for field in ("secret_key", "bootstrap_admin_password"):
+            filename = getattr(self, f"{field}_file")
+            if filename:
+                if getattr(self, field):
+                    raise ValueError(f"Configure somente {field.upper()} ou {field.upper()}_FILE")
+                setattr(self, field, Path(filename).read_text(encoding="utf-8").rstrip("\r\n"))
+        return self
+
     @property
     def database_url(self) -> str:
+        if self.self_hosted:
+            return f"sqlite+aiosqlite:///{(self.data_dir / 'fiscal.sqlite3').as_posix()}"
         if self.database_url_override:
             return self.database_url_override
         return (
@@ -54,6 +73,14 @@ class Settings(BaseSettings):
             f"{quote(self.postgres_password, safe='')}@{self.postgres_host}:"
             f"{self.postgres_port}/{quote(self.postgres_db, safe='')}"
         )
+
+    @property
+    def self_hosted(self) -> bool:
+        return self.deployment_mode == "self"
+
+    @property
+    def data_dir(self) -> Path:
+        return Path(self.self_data_dir).expanduser().resolve()
 
     @property
     def celery_broker(self) -> str:
@@ -76,9 +103,18 @@ class Settings(BaseSettings):
                                    self.cbs_auto_sync_resources.split(",") if value.strip()))
 
     def validate_security(self) -> None:
+        if self.deployment_mode not in {"central", "self"}:
+            raise RuntimeError("DEPLOYMENT_MODE inválido")
+        if self.self_hosted:
+            if self.database_url_override:
+                raise RuntimeError("No modo self configure SELF_DATA_DIR, não DATABASE_URL_OVERRIDE")
+            if self.provider_mode != "disabled":
+                raise RuntimeError("Modo self exige PROVIDER_MODE=disabled até homologação do fluxo local")
+            if self.cbs_auto_sync_enabled:
+                raise RuntimeError("Sincronização CBS automática não está habilitada no modo self")
         if len(self.secret_key) < 32:
             raise RuntimeError("SECRET_KEY deve ter pelo menos 32 caracteres aleatórios")
-        if self.provider_mode not in {"fixture", "receita"}:
+        if self.provider_mode not in {"fixture", "receita", "disabled"}:
             raise RuntimeError("PROVIDER_MODE inválido")
         if self.provider_mode == "receita":
             if not all((self.cbs_token_url, self.cbs_client_id, self.cbs_client_secret,

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib.util
+import contextlib
+import io
 import json
 import os
 import stat
@@ -77,7 +79,16 @@ class DeployerTests(unittest.TestCase):
 
     def generate(self, **options: object) -> dict:
         return deployer.generate(target="docker", channel="production", output=self.output,
-                                 admin_email="admin@example.org", **options)
+                                 admin_email="admin@example.org", owner="wkarts", **options)
+
+    def test_owner_must_be_explicit_in_new_invocation(self) -> None:
+        parser = deployer.make_parser()
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parser.parse_args(["generate", "--target", "docker", "--channel", "production",
+                               "--output", str(self.output), "--admin-email", "admin@example.org"])
+        self.assertEqual(parser.parse_args(["generate", "--target", "docker", "--channel", "production",
+                                            "--output", str(self.output), "--admin-email", "admin@example.org",
+                                            "--owner", "wkarts"]).owner, "wkarts")
 
     def test_generate_uses_version_and_url_credentials_agree(self) -> None:
         result = self.generate()
@@ -200,6 +211,7 @@ class DeployerTests(unittest.TestCase):
                         output = Path(self.temp.name) / target / channel
                         made = deployer.generate(target=target, channel=channel, output=output,
                                                  admin_email="admin@example.org",
+                                                 owner="wkarts",
                                                  tag=stable_tag if channel == "production" else None)
                         checked = deployer.validate_directory(output)
                         self.assertEqual(checked["tag"], "develop" if channel == "develop" else stable_tag)

@@ -105,7 +105,9 @@ def _key(node: ET.Element | None, prefix: str) -> str | None:
     if node is None:
         return None
     identifier = node.attrib.get("Id", "")
-    if re.fullmatch(re.escape(prefix) + r"[0-9]{44}", identifier):
+    # The 44-position access key can contain letters in its CNPJ segment.
+    # This is syntax extraction only; no check digit or signer is verified.
+    if re.fullmatch(re.escape(prefix) + r"[0-9A-Z]{44}", identifier):
         return identifier[len(prefix):]
     return None
 
@@ -175,7 +177,7 @@ def parse_fiscal_xml(data: bytes, company_cnpj: str) -> FiscalXmlMetadata:
     document_key = _key(info, prefix) if prefix else None
     if document_key is None and key_name:
         candidate = descendant(root, key_name)
-        if candidate is not None and candidate.text and re.fullmatch(r"[0-9]{44}", candidate.text.strip()):
+        if candidate is not None and candidate.text and re.fullmatch(r"[0-9A-Z]{44}", candidate.text.strip()):
             document_key = candidate.text.strip()
 
     issue_at = value(ide, "dhEmi") or value(ide, "dEmi")

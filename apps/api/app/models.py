@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, JSON, LargeBinary, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -27,6 +27,28 @@ class Organization(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
+class InstallationBrand(Base):
+    """One visual identity for the entire customer-hosted installation."""
+
+    __tablename__ = "installation_brand"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"))
+    display_name: Mapped[str] = mapped_column(String(160))
+    short_name: Mapped[str] = mapped_column(String(40))
+    primary_color: Mapped[str] = mapped_column(String(7))
+    secondary_color: Mapped[str] = mapped_column(String(7))
+    logo_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class InstallationBrandAsset(Base):
+    __tablename__ = "installation_brand_assets"
+    sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
+    media_type: Mapped[str] = mapped_column(String(32))
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+
+
 class User(Base):
     __tablename__ = "users"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid)
@@ -36,6 +58,15 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), default="admin")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     token_version: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class AuthAttempt(Base):
+    """Persisted login throttle shared by API restarts in a self installation."""
+
+    __tablename__ = "auth_attempts"
+    username_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    window_end: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
 
 
 class Company(Base):

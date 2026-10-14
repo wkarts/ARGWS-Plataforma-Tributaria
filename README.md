@@ -1,8 +1,8 @@
-# Reforma Tributária — espaço de trabalho fiscal assistido
+# Gestão Fiscal — espaço de trabalho fiscal assistido
 
-Plataforma independente em **FastAPI** e Vue para reunir evidências fiscais por empresa: consultas assíncronas da Apuração Assistida da CBS, XMLs fornecidos pelo cliente, trilha de origem e comparação por documento e competência. O operador identifica lacunas e divergências para revisão. **O painel não constitui declaração, cálculo legal ou homologação da apuração de CBS/IBS.** O modo padrão das consultas CBS usa **fixture sintética**; chamadas autenticadas à Receita são opcionais e dependem de credencial e autorização do contribuinte, disponibilidade do recurso e teste no ambiente oficial.
+Plataforma em **FastAPI** e Vue para reunir evidências fiscais por empresa: XMLs fornecidos pelo cliente, observações da CBS, trilha de origem e comparação por documento e competência. A [instalação self](docs/SELF-HOSTED.md) fica na infraestrutura do cliente, com SQLite e arquivos locais; o coletor gráfico roda nos computadores que possuem os XMLs e os encaminha à URL HTTPS dessa instalação. Uma instalação pode cadastrar várias empresas, cada qual com identidade e credencial de ingestão próprias. **A prévia não constitui declaração nem homologação da apuração de CBS/IBS.** O modo de consultas CBS existente usa **fixture sintética** por padrão; chamadas autenticadas à Receita dependem de credencial, webhook público, disponibilidade do recurso e teste oficial.
 
-Esta base foi construída após avaliar três projetos anexados: DealsHUB 1.0.0, ARGWS Scout 0.8.1 e ARGWS Connect API 1.5.1. Reaproveitamos decisões de operação e entrega, sem modificar ou incorporar os projetos originais. A [avaliação tecnológica](docs/AVALIACAO-TECNOLOGICA.md), a [arquitetura](docs/ARQUITETURA.md) e o [plano de homologação](docs/ROADMAP-E-HOMOLOGACAO.md) registram escolhas, alternativas e lacunas.
+A [arquitetura](docs/ARQUITETURA.md), o [plano de homologação](docs/ROADMAP-E-HOMOLOGACAO.md) e os [contratos oficiais](docs/CONTRATOS-OFICIAIS-2026.md) registram as escolhas e os limites de cada conector.
 
 ## O que já existe e o que depende de habilitação
 
@@ -10,9 +10,11 @@ Esta base foi construída após avaliar três projetos anexados: DealsHUB 1.0.0,
 | --- | --- | --- |
 | CBS | Abertura assíncrona, ticket, webhook e recuperação por situação, download e preservação do JSON bruto com SHA-256; painel de consultas e registros. Agendamento conservador opcional de débitos/créditos. | Fixture é o padrão. O provedor Receita exige flags, credenciais, CNPJ base autorizado e homologação específica. Uma consulta incremental não comprova cobertura integral de uma competência. |
 | XML do cliente | Credencial de ingestão vinculada à empresa, envio do XML original por HTTPS, deduplicação por SHA-256, objeto privado e listagem/download. Extrai metadados de NF-e/NFC-e, CT-e, MDF-e e alguns eventos quando disponíveis. | Presença de `ds:Signature` e protocolo declarado são **informações do XML**, sem validação criptográfica, do schema ou confirmação on-line da autorização; outras famílias podem permanecer sem dados estruturados. Limite de 10 MiB por arquivo. |
-| Serviço local | Coletor configurável para pastas autorizadas, checkpoint SQLite, retry e instalação como daemon Linux ou Windows Service com wrapper. O arquivo original não é modificado. | O binário distribuível depende de build e smoke na esteira; o modo de pastas não requer certificado fiscal. |
+| Coletor local | Interface para múltiplas empresas, URL HTTPS, token, CNPJ, pastas, certificado SEFAZ e controle do serviço. Catálogo SQLite e estado/token separados por UUID; o original não é modificado. | A release precisa compilar e testar o instalador gráfico Windows com WinSW embutido e o pacote GUI Linux em runners nativos; modo de pastas não requer certificado fiscal. |
 | Distribuição NF-e opcional | No mesmo processo local, adaptador **opt-in** de `NFeDistribuicaoDFe` em `distNSU`, SOAP 1.2/mTLS com PEM, checkpoint por CNPJ/ambiente e spool durável do retorno SOAP, gzip e XML. Arquivos integrais compatíveis com marcador XMLDSig são encaminhados ao fluxo de ingestão. | Não há teste autenticado/homologação com SEFAZ. Resumos e eventos ficam classificados separadamente; resumo **não se transforma em NF-e integral**. Presença de XMLDSig não valida assinatura nem autorização. Só um consumidor deve coordenar o NSU daquela identidade. |
 | Conferência | Comparação somente leitura entre observações CBS e XMLs da mesma empresa/competência, mostrando correspondência de valor, divergência, ausência local, ambiguidade e estado desconhecido. | Sem cobertura oficial comprovada, ausência em consulta incremental fica **desconhecida**. Correspondência de valor não comprova autenticidade, direito ao crédito nem extinção do tributo. Limite interativo de 5.000 registros e 5.000 XMLs por competência. |
+| Prévia de apuração assistida | Totais **declarados** em XML por CBS/IBS, modelo e entrada/saída, com críticas por chave, ID e hash e observações CBS concluídas separadas de fixture. | Cobertura, autenticidade, autorização e direitos creditórios não são comprovados; o endpoint não calcula saldo a pagar nem faz declaração. |
+| Perfil self | API, web e SQLite/arquivos locais no host do cliente, sem banco, broker, cache nem S3 externos; marca administrável por instalação. | Perfil self inicial não liga o worker de CBS/IBS; acesso HTTPS externo e backup/restauração precisam ser preparados no host do cliente. |
 | Controles manuais | Candidato a crédito presumido de estoque em rascunho com referência de evidência; parcela comercial com referência documental e data informada de pagamento. | Não há cálculo do crédito de transição, apropriação/utilização automática ou baixa de débito fiscal por pagamento comercial. |
 | IBS e outros DF-e | Contratos e fronteiras próprios documentados em [contratos oficiais](docs/CONTRATOS-OFICIAIS-2026.md). | A API IBS não está ligada ao sistema; CT-e, MDF-e e NFS-e oficiais requerem conectores próprios. |
 
@@ -20,20 +22,25 @@ Esta base foi construída após avaliar três projetos anexados: DealsHUB 1.0.0,
 
 | Camada | Tecnologia | Papel nesta versão |
 | --- | --- | --- |
-| API e persistência | Python 3.13, FastAPI, Pydantic, SQLAlchemy, Alembic, PostgreSQL | Organizações, usuários, empresas, agentes de ingestão, XMLs, consultas CBS, registros, controles manuais e auditoria. |
-| Execução | Celery, RabbitMQ, Redis | Abertura assíncrona, consulta de situação, cache de OAuth, scheduler CBS opcional e coordenação. |
-| Evidência | API S3 genérica; RustFS no Compose local | JSON e XML originais privados, SHA-256 e referências duráveis; produção requer backup e restauração testados. |
+| API e persistência | Python 3.13, FastAPI, SQLAlchemy, Alembic, SQLite no self; PostgreSQL no perfil legado | Organizações, usuários, empresas, agentes de ingestão, XMLs, observações, controles manuais e auditoria. |
+| Execução CBS no perfil legado | Celery, RabbitMQ, Redis | Abertura assíncrona, consulta de situação, cache de OAuth e agenda opcional; desabilitada no self inicial. |
+| Evidência | Arquivos privados no self; S3/RustFS no perfil legado | JSON/XML originais, SHA-256 e referências duráveis; exige backup e restauração testados. |
 | Painel | Vue 3, TypeScript, Vite, PWA | Consultas, XMLs, agentes, conciliação por competência, registros e download com hash. |
-| Coletor do cliente | Python stdlib, SQLite, systemd/WinSW, PyInstaller | Vigia pastas e, se autorizado e configurado, consulta `distNSU` da NF-e com certificado no cliente; transmite XMLs elegíveis de forma idempotente. Token e chave PEM fora do JSON. |
+| Coletor do cliente | Python stdlib, Tkinter, SQLite, systemd/WinSW, PyInstaller e instalador Windows | GUI configura várias empresas e controla o serviço; vigia pastas e, quando autorizado, consulta `distNSU` NF-e com certificado local. Token e chave PEM fora do JSON. |
 | Distribuição | Docker Compose, GHCR, GitHub Actions | Develop/production, imagens base, SemVer, checksums, release e limpeza conservadora. |
-| Instalação da plataforma | Python stdlib, Tkinter, PyInstaller | Deployer GUI e CLI para Docker, Dockge, CloudPanel e Portainer. |
+| Instalação | Docker Compose local para self; Tkinter/PyInstaller para deploy legado | Plataforma self usa build local; utilitário gráfico legado prepara Docker, Dockge, CloudPanel e Portainer com worker interno. |
 
-## Executar com imagens locais
+## Começar com a instalação self
+
+Leia [instalação e operação self](docs/SELF-HOSTED.md) para gerar segredos, subir API+web com SQLite, configurar TLS, cadastrar empresas e instalar o coletor gráfico. O [manual da prévia](docs/APURACAO-ASSISTIDA.md) explica exatamente o que entra nas somas e o que permanece pendente de validação.
+
+## Perfil legado com imagens locais
 
 Requer Docker com Compose v2, Python 3.12+ apenas para gerar a instalação, acesso às imagens base públicas e portas locais disponíveis. Na raiz do projeto:
 
 ```bash
 python3 tools/deployer/deployer.py generate --target docker --channel develop \
+  --owner sua-organizacao \
   --output ./installation --admin-email admin@example.org
 python3 tools/deployer/deployer.py validate --directory ./installation
 docker compose --project-directory ./deploy --env-file ./installation/.env \

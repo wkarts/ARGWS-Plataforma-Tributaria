@@ -50,16 +50,30 @@ assert 'steps.sha.outputs.tag' in workflow and 'tag=sha-${GITHUB_SHA::12}' in wo
 assert 'bash scripts/publish_release.sh release-files' in workflow
 assert 'uses: ./.github/workflows/collector-binaries.yml' in workflow
 assert 'python3 scripts/verify_collector_assets.py release-collector-linux release-collector-windows' in workflow
-assert 'docs/COLETOR-LOCAL-OPERACAO.md release-files/OPERACAO-XML-Collector.md' in workflow
+assert 'tools/collector/systemd/README-self.md release-files/README-XML-Collector-Linux.md' in workflow
+assert 'tools/collector/windows/README-installer.md release-files/README-XML-Collector-Windows.md' in workflow
 assert 'docs/CONTRATOS-OFICIAIS-2026.md release-files/CONTRATOS-OFICIAIS-2026.md' in workflow
-for name in ('fiscal-xml-collector-linux-amd64', 'fiscal-xml-collector-windows-amd64.exe'):
+for name in ('fiscal-xml-collector-gui-linux-x64.tar.gz', 'fiscal-xml-collector-setup-windows-x64.exe'):
     assert f'cp release-collector-' in workflow and f'/{name} release-files/' in workflow
     assert name in collector
-for name in ('fiscal-xml-collector.service', 'install.sh', 'uninstall.sh',
-             'install-winsw.ps1', 'uninstall-winsw.ps1'):
-    assert f'tools/collector/' in workflow and name in workflow
+assert 'Fiscal-Self-Deploy-$label.zip' in workflow
+assert 'release-deployer/' not in workflow and 'README-Deployer.md release-files/' not in workflow
+assert 'cp release-deployer/*.exe' not in workflow
+assert 'cp release-collector-linux/fiscal-xml-collector-linux-amd64' not in workflow
+assert 'cp release-collector-windows/fiscal-xml-collector-windows-amd64.exe' not in workflow
+for name in ('fiscal-xml-gui-linux-x64', 'fiscal-xml-worker-linux-x64',
+             'fiscal-xml-gui-windows-x64', 'fiscal-xml-worker-windows-x64',
+             'self-install.sh', 'fiscal-xml-self.service', 'manage-service.ps1'):
+    assert name in collector or name in (ROOT / 'tools/collector/windows/installer.iss').read_text(encoding='utf-8')
+assert (ROOT / 'tools/collector/windows/installer.iss').is_file()
 assert collector.count('self-test --offline') >= 4
-assert collector.count('--add-data') == 2 and collector.count('VERSION') >= 3
+assert collector.count('--add-data') == 4 and collector.count('VERSION') >= 4
+assert '--windowed --uac-admin' in collector
+assert '05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da' in collector
+assert '9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732' in collector
+assert 'https://github.com/winsw/winsw/releases/download/v2.12.0/WinSW-x64.exe' in collector
+assert 'python3 scripts/verify_collector_assets.py --single linux' in collector
+assert 'scripts/verify_collector_assets.py --single windows' in collector
 assert workflow.index('verify_collector_assets.py') < workflow.index('sha256sum -- * > SHA256SUMS.txt') < workflow.index('bash scripts/publish_release.sh release-files')
 assert publisher.index('gh release download "$tag" --dir "$verified"') < publisher.index('promote "$image:$VERSION" "$ref"')
 assert publisher.index('promote "$image:$tag" "$ref"') < publisher.index('gh release edit "$tag" --draft=false')
