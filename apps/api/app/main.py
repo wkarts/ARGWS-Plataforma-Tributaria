@@ -31,7 +31,7 @@ from app.tax_calculator_api import router as tax_calculator_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    get_settings().validate_security()
+    get_settings().validate_security(require_provider=False)
     yield
 
 
@@ -50,19 +50,30 @@ def capabilities() -> dict:
     if s.provider_mode == "disabled":
         return {
             "provider_mode": "disabled", "environments": [],
+            "official_configuration": {"ready": False,
+                "reason": "Integração oficial desabilitada", "missing": []},
             "resources": {name: {"enabled": False,
-                "reason": "Integração CBS ainda não homologada neste modo"}
+                "reason": "Integração CBS desabilitada; recursos locais continuam disponíveis"}
                 for name in ("debitos", "creditos", "pagamentos", "recolhimentos")},
             "ibs": {"enabled": False, "reason": "Contrato IBS separado, ainda não homologado"},
         }
     real = s.provider_mode == "receita"
-    environments = ["fixture"] if not real else (["restricted"] if s.cbs_restricted_enabled else []) + (["production"] if s.cbs_production_enabled else [])
+    readiness = s.receipt_readiness() if real else {"ready": False, "reason": None, "missing": []}
+    configured = not real or readiness["ready"]
+    environments = (["fixture"] if not real else
+        (["restricted"] if s.cbs_restricted_enabled else []) +
+        (["production"] if s.cbs_production_enabled else [])) if configured else []
     return {
         "provider_mode": s.provider_mode,
         "environments": environments,
+        "official_configuration": readiness,
         "resources": {name: {
-            "enabled": not real or ((name in {"debitos", "creditos"}) or s.cbs_payments_enabled),
-            "reason": "Disponibilidade e credenciais oficiais devem ser homologadas" if real and name in {"pagamentos", "recolhimentos"} and not s.cbs_payments_enabled else None,
+            "enabled": bool(configured) and (
+                not real or name in {"debitos", "creditos"} or s.cbs_payments_enabled),
+            "reason": ("Integração Receita pendente: " + str(readiness["reason"])
+                if not configured else
+                "Disponibilidade e credenciais oficiais devem ser homologadas"
+                if real and name in {"pagamentos", "recolhimentos"} and not s.cbs_payments_enabled else None),
         } for name in ("debitos", "creditos", "pagamentos", "recolhimentos")},
         "ibs": {"enabled": False, "reason": "Contrato IBS separado, ainda não homologado"},
     }
@@ -230,7 +241,8 @@ def check_capability(payload: QueryIn, org_id: str, cnpj_base: str) -> None:
     s = get_settings()
     caps = capabilities()
     if payload.environment not in caps["environments"] or not caps["resources"][payload.resource]["enabled"]:
-        raise HTTPException(409, "Ambiente ou recurso desabilitado")
+        raise HTTPException(409, caps["resources"].get(payload.resource, {}).get("reason")
+                            or "Ambiente ou recurso desabilitado")
     if payload.environment != "fixture" and (org_id != s.cbs_credential_organization_id
                                                 or cnpj_base not in s.allowed_bases):
         raise HTTPException(403, "Credencial não habilitada para organização/CNPJ base")

@@ -129,7 +129,12 @@ def test_safe_get_can_refresh_token_after_unauthorized(monkeypatch):
 def test_worker_rechecks_each_credential_scope(monkeypatch):
     from app import worker
     allowed = Settings(provider_mode="receita", cbs_credential_organization_id="matrix-org",
-        cbs_allowed_bases="12345678", cbs_restricted_enabled=True)
+        secret_key="only-for-test-strong-signing-key-123456789",
+        cbs_allowed_bases="12345678", cbs_restricted_enabled=True,
+        cbs_token_url="https://api.receitafederal.gov.br/oauth/token",
+        cbs_client_id="authorized-client",
+        cbs_client_secret="authorized-test-secret",
+        cbs_webhook_base_url="https://callback.example")
     monkeypatch.setattr(worker, "settings", allowed)
     check = worker.authorization_rejection
     assert check("matrix-org", "12345678", "debitos", "restricted") is None

@@ -28,7 +28,7 @@ def utc(value: datetime) -> datetime:
 
 async def schedule_due(settings: Settings | None = None) -> int:
     settings = settings or get_settings()
-    if not settings.cbs_auto_sync_enabled:
+    if not settings.cbs_auto_sync_enabled or not settings.receipt_readiness()["ready"]:
         return 0
     settings.validate_security()
     current = now()

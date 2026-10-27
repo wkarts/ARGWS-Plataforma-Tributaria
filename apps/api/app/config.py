@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     deployment_mode: str = "central"
+    app_env: str = "development"
     self_data_dir: str = "./data"
 
     postgres_host: str = "localhost"
@@ -37,7 +38,7 @@ class Settings(BaseSettings):
     bootstrap_admin_email: str = ""
     bootstrap_admin_password: str = ""
     bootstrap_admin_password_file: str = ""
-    provider_mode: str = "fixture"
+    provider_mode: str = "disabled"
     cbs_restricted_enabled: bool = False
     cbs_production_enabled: bool = False
     cbs_payments_enabled: bool = False
@@ -108,9 +109,39 @@ class Settings(BaseSettings):
         return tuple(dict.fromkeys(value.strip().lower() for value in
                                    self.cbs_auto_sync_resources.split(",") if value.strip()))
 
-    def validate_security(self) -> None:
+    def receipt_readiness(self) -> dict:
+        """Safe operational status without exposing any secret value."""
+        if self.provider_mode != "receita":
+            return {"ready": False, "reason": "Integração Receita desabilitada", "missing": []}
+        required = {
+            "CBS_TOKEN_URL": self.cbs_token_url,
+            "CBS_CLIENT_ID": self.cbs_client_id,
+            "CBS_CLIENT_SECRET": self.cbs_client_secret,
+            "CBS_WEBHOOK_BASE_URL": self.cbs_webhook_base_url,
+            "CBS_ALLOWED_BASES": self.allowed_bases,
+            "CBS_CREDENTIAL_ORGANIZATION_ID": self.cbs_credential_organization_id,
+        }
+        missing = [key for key, value in required.items() if not value]
+        if self.self_hosted and not self.cbs_client_secret_file:
+            missing.append("CBS_CLIENT_SECRET_FILE")
+        if not self.cbs_restricted_enabled and not self.cbs_production_enabled:
+            missing.append("CBS_RESTRICTED_ENABLED / CBS_PRODUCTION_ENABLED")
+        try:
+            self.validate_security(require_provider=True)
+        except RuntimeError as exc:
+            return {"ready": False, "reason": str(exc), "missing": missing}
+        if missing:
+            return {"ready": False, "reason": "Nenhum ambiente CBS oficial habilitado",
+                    "missing": missing}
+        return {"ready": True, "reason": None, "missing": []}
+
+    def validate_security(self, *, require_provider: bool = True) -> None:
         if self.deployment_mode not in {"central", "self"}:
             raise RuntimeError("DEPLOYMENT_MODE inválido")
+        if self.app_env not in {"production", "development", "develop", "test"}:
+            raise RuntimeError("APP_ENV inválido")
+        if self.app_env == "production" and self.provider_mode == "fixture":
+            raise RuntimeError("Produção não permite PROVIDER_MODE=fixture com dados simulados")
         if self.self_hosted:
             if self.database_url_override:
                 raise RuntimeError("No modo self configure SELF_DATA_DIR, não DATABASE_URL_OVERRIDE")
@@ -120,7 +151,7 @@ class Settings(BaseSettings):
             raise RuntimeError("SECRET_KEY deve ter pelo menos 32 caracteres aleatórios")
         if self.provider_mode not in {"fixture", "receita", "disabled"}:
             raise RuntimeError("PROVIDER_MODE inválido")
-        if self.provider_mode == "receita":
+        if self.provider_mode == "receita" and require_provider:
             if self.self_hosted and not self.cbs_client_secret_file:
                 raise RuntimeError("No modo self, informe CBS_CLIENT_SECRET_FILE protegido")
             if not all((self.cbs_token_url, self.cbs_client_id, self.cbs_client_secret,
@@ -150,7 +181,7 @@ class Settings(BaseSettings):
                 raise RuntimeError("Webhook CBS exige hostname HTTPS público na porta padrão")
             if self.self_hosted and not (self.cbs_restricted_enabled or self.cbs_production_enabled):
                 raise RuntimeError("Habilite explicitamente um ambiente CBS no modo self")
-        if self.cbs_auto_sync_enabled:
+        if self.cbs_auto_sync_enabled and require_provider:
             if self.provider_mode != "receita":
                 raise RuntimeError("Sincronização automática exige provedor Receita habilitado")
             if self.cbs_auto_sync_environment not in {"restricted", "production"}:
