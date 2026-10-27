@@ -471,7 +471,8 @@ def rollback(directory: Path, *, tag: str | None, confirmed: bool) -> dict:
 def upgrade(directory: Path, *, tag: str | None, confirmed: bool) -> dict:
     if not confirmed:
         raise DeployerError("Atualização exige --yes e confirmação na interface gráfica.")
-    chosen = tag or product_version()
+    current = validate_directory(directory)
+    chosen = image_tag("docker", "production", current["owner"], tag)
     if not (SEMVER.fullmatch(chosen) or SHA_TAG.fullmatch(chosen)):
         raise DeployerError("Atualização exige SemVer estável ou sha-<12 hex>.")
     return switch_image_tag(directory.expanduser().resolve(), tag=chosen, reason="upgrade")
@@ -548,8 +549,9 @@ def status(directory: Path) -> dict:
     return result
 
 
-def preview(*, target: str, channel: str, owner: str, tag: str | None,
-            bind: str | None, port: int | None) -> dict:
+def preview(*, target: str, channel: str, owner: str | None = None,
+            tag: str | None = None, bind: str | None = None, port: int | None = None) -> dict:
+    owner = owner or defaults(target, channel)["owner"]
     if not OWNER.fullmatch(owner):
         raise DeployerError("IMAGE_OWNER inválido.")
     if bind is not None and bind not in ("127.0.0.1", "::1"):
@@ -562,7 +564,7 @@ def preview(*, target: str, channel: str, owner: str, tag: str | None,
         compose = (template / "compose.yaml").read_text(encoding="utf-8")
     except OSError as exc:
         raise DeployerError("Modelo de deploy ausente.") from exc
-    chosen = tag or ("develop" if channel == "develop" else product_version())
+    chosen = image_tag(target, channel, owner, tag)
     if channel == "production" and not (SEMVER.fullmatch(chosen) or SHA_TAG.fullmatch(chosen)):
         raise DeployerError("Produção exige SemVer estável ou sha-<12 hex>.")
     if channel == "develop" and chosen != "develop" and not (SEMVER.fullmatch(chosen) or SHA_TAG.fullmatch(chosen)):
