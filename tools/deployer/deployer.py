@@ -320,8 +320,12 @@ def generate(*, target: str, channel: str, output: Path, owner: str | None = Non
         if old_env is None:
             env_path.unlink(missing_ok=True)
         raise
+    persisted = parse_env(env_data.decode("utf-8"))
     return {"directory": str(output), "target": target, "channel": channel,
-            "version": version, "tag": parse_env(env_data.decode("utf-8"))["APP_TAG"],
+            "version": version, "tag": persisted["APP_TAG"],
+            "owner": persisted["IMAGE_OWNER"], "web_port": int(persisted["WEB_PORT"]),
+            "compose_path": str(compose_path), "env_path": str(env_path),
+            "files_generated": [str(compose_path), str(env_path)],
             "env_preserved": old_env is not None, "backup_id": backup_id}
 
 
