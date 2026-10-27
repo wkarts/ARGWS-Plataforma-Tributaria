@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import AppIcon from "./components/AppIcon.vue";
 import FiscalWorkspace from "./components/FiscalWorkspace.vue";
 import FinanceControls from "./components/FinanceControls.vue";
-import CentralReforma from "./components/CentralReforma.vue";
+import FiscalCommandCenter from "./components/FiscalCommandCenter.vue";
 import TaxCalculator from "./components/TaxCalculator.vue";
 import BrandingSettings from "./components/BrandingSettings.vue";
 import { ApiClient, ApiError } from "./api.ts";
@@ -37,7 +37,7 @@ type View = "overview" | "central" | "calculator" | "queries" | "credits" | "mov
 type CreditView = "government_reported" | "presumed_stock" | "unclassified";
 const navigation: { id: View; label: string; icon: string; hint: string }[] = [
   { id: "overview", label: "Visão geral", icon: "overview", hint: "Operação" },
-  { id: "central", label: "Central da Reforma", icon: "audit", hint: "Indicadores e histórico" },
+  { id: "central", label: "Central Tributária", icon: "audit", hint: "Indicadores e histórico" },
   { id: "calculator", label: "Calculadora Tributária", icon: "credits", hint: "Cálculo por operação" },
   { id: "queries", label: "Consultas CBS", icon: "queries", hint: "Tíquetes" },
   { id: "credits", label: "Créditos", icon: "credits", hint: "Apropriação" },
@@ -1929,7 +1929,7 @@ onBeforeUnmount(() => {
             :admin="isAdmin()"
             :refresh-trigger="workspaceRefresh"
           />
-          <CentralReforma
+          <FiscalCommandCenter
             v-else-if="view === 'central'"
             :key="companyId"
             :api="api"
