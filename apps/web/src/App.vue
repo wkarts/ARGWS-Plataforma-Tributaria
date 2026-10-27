@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import AppIcon from "./components/AppIcon.vue";
 import FiscalWorkspace from "./components/FiscalWorkspace.vue";
 import FinanceControls from "./components/FinanceControls.vue";
+import CentralReforma from "./components/CentralReforma.vue";
+import TaxCalculator from "./components/TaxCalculator.vue";
 import BrandingSettings from "./components/BrandingSettings.vue";
 import { ApiClient, ApiError } from "./api.ts";
 import { applyBrand, DEFAULT_BRAND } from "./branding.ts";
@@ -31,10 +33,12 @@ import type {
 } from "./types.ts";
 import { RESOURCES } from "./types.ts";
 
-type View = "overview" | "queries" | "credits" | "movements" | "audit" | "documents" | "agents" | "reconciliation" | "finance_controls" | "identity";
+type View = "overview" | "central" | "calculator" | "queries" | "credits" | "movements" | "audit" | "documents" | "agents" | "reconciliation" | "finance_controls" | "identity";
 type CreditView = "government_reported" | "presumed_stock" | "unclassified";
 const navigation: { id: View; label: string; icon: string; hint: string }[] = [
   { id: "overview", label: "Visão geral", icon: "overview", hint: "Operação" },
+  { id: "central", label: "Central da Reforma", icon: "audit", hint: "Indicadores e histórico" },
+  { id: "calculator", label: "Calculadora Tributária", icon: "credits", hint: "Cálculo por operação" },
   { id: "queries", label: "Consultas CBS", icon: "queries", hint: "Tíquetes" },
   { id: "credits", label: "Créditos", icon: "credits", hint: "Apropriação" },
   {
@@ -522,7 +526,7 @@ function navigate(target: View) {
   banner.value = null;
 }
 function refreshCurrent() {
-  if (view.value === "documents" || view.value === "agents" || view.value === "reconciliation" || view.value === "finance_controls") {
+  if (view.value === "documents" || view.value === "agents" || view.value === "reconciliation" || view.value === "finance_controls" || view.value === "central" || view.value === "calculator") {
     workspaceRefresh.value++;
     return;
   }
@@ -785,6 +789,8 @@ onBeforeUnmount(() => {
               <p v-if="view === 'overview'">
                 Acompanhe suas consultas e a origem dos dados em um só lugar.
               </p>
+              <p v-else-if="view === 'central'">Acompanhe as operações e consultas efetivamente registradas para a empresa.</p>
+              <p v-else-if="view === 'calculator'">Calcule os tributos por operação com o motor normativo local e consulte a memória arquivada.</p>
               <p v-else-if="view === 'queries'">
                 Solicitações incrementais, estados e tíquetes da Apuração
                 Assistida da CBS.
@@ -1921,6 +1927,21 @@ onBeforeUnmount(() => {
             :company-id="companyId"
             :view="view"
             :admin="isAdmin()"
+            :refresh-trigger="workspaceRefresh"
+          />
+          <CentralReforma
+            v-else-if="view === 'central'"
+            :key="companyId"
+            :api="api"
+            :company-id="companyId"
+            :refresh-trigger="workspaceRefresh"
+            @open-queries="navigate('queries')"
+          />
+          <TaxCalculator
+            v-else-if="view === 'calculator'"
+            :key="companyId"
+            :api="api"
+            :company-id="companyId"
             :refresh-trigger="workspaceRefresh"
           />
           <FinanceControls
