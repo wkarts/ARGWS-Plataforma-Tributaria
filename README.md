@@ -30,6 +30,12 @@ A [arquitetura](docs/ARQUITETURA.md), o [plano de homologação](docs/ROADMAP-E-
 | Distribuição | Docker Compose, GHCR, GitHub Actions | Develop/production, imagens base, SemVer, checksums, release e limpeza conservadora. |
 | Instalação | Docker Compose local para self; Tkinter/PyInstaller para deploy legado | Plataforma self usa build local; utilitário gráfico legado prepara Docker, Dockge, CloudPanel e Portainer com worker interno. |
 
+## Cálculo normativo por operação e central operacional
+
+O painel inclui **Central Tributária** com indicadores/histórico por empresa e **Calculadora Tributária** integrada ao componente **oficial offline** instalado pelo próprio cliente. O backend não utiliza percentuais ou classificações presumidos: os resultados só são registrados após chamada real ao motor local e confirmação de sua versão normativa, com conservação do retorno original, hashes e segregação por organização/empresa. O módulo suporta a integração do regime regular e mantém contrato independente configurável para o Simples Nacional. Ausência do motor impede somente os cálculos, sem interferir na coleta e Apuração Assistida existente.
+
+A configuração, o uso do Swagger oficial, o histórico das versões, os contratos HTTP e os requisitos de homologação estão em [Cálculo Tributário Local](docs/CALCULO-TRIBUTARIO-LOCAL.md). Cálculo de operação não equivale a apuração concluída nem comprova crédito aproveitável ou extinção de débito.
+
 ## Começar com a instalação self
 
 Leia [instalação e operação self](docs/SELF-HOSTED.md) para gerar segredos, subir API+web com SQLite, configurar TLS, cadastrar empresas e instalar o coletor gráfico. O [manual da prévia](docs/APURACAO-ASSISTIDA.md) explica exatamente o que entra nas somas e o que permanece pendente de validação.
