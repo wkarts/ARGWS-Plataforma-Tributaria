@@ -19,6 +19,7 @@ from app.db import get_session
 from app.models import AuditEvent, CommercialInstallment, Company, StockCreditClaim, User
 from app.schemas import valid_cnpj
 from app.security import admin_only, current_user
+from app.access import accessible_companies, require_company, require_permission
 
 
 router = APIRouter(prefix="/api/v1", tags=["finance-controls"])
@@ -119,6 +120,7 @@ async def _owned_company(session: AsyncSession, user: User, company_id: str) -> 
         Company.id == company_id, Company.organization_id == user.organization_id))
     if company is None:
         raise HTTPException(404, "Empresa não encontrada")
+    await require_company(user, session, company_id, "finance.read")
     return company
 
 
@@ -173,7 +175,11 @@ async def list_stock_credit_claims(response: Response, company_id: str | None = 
                                    user: User = Depends(current_user),
                                    session: AsyncSession = Depends(get_session)) -> dict:
     offset = _offset(cursor)
+    await require_permission(user, session, "finance.read")
+    allowed = await accessible_companies(user, session)
     stmt = select(StockCreditClaim).where(StockCreditClaim.organization_id == user.organization_id)
+    if allowed is not None:
+        stmt = stmt.where(StockCreditClaim.company_id.in_(allowed))
     if company_id is not None:
         await _owned_company(session, user, company_id)
         stmt = stmt.where(StockCreditClaim.company_id == company_id)
@@ -208,8 +214,12 @@ async def list_commercial_installments(response: Response, company_id: str | Non
                                        user: User = Depends(current_user),
                                        session: AsyncSession = Depends(get_session)) -> dict:
     offset = _offset(cursor)
+    await require_permission(user, session, "finance.read")
+    allowed = await accessible_companies(user, session)
     stmt = select(CommercialInstallment).where(
         CommercialInstallment.organization_id == user.organization_id)
+    if allowed is not None:
+        stmt = stmt.where(CommercialInstallment.company_id.in_(allowed))
     if company_id is not None:
         await _owned_company(session, user, company_id)
         stmt = stmt.where(CommercialInstallment.company_id == company_id)

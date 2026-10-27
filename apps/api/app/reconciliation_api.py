@@ -12,6 +12,7 @@ from app.db import get_session
 from app.models import Company, FiscalDocument, Query, Record, User
 from app.reconciliation import assisted_preview, reconcile
 from app.security import current_user
+from app.access import require_company
 
 
 router = APIRouter(prefix="/api/v1", tags=["reconciliation"])
@@ -29,6 +30,7 @@ async def preview(company_id: str, period: str,
         Company.id == company_id, Company.organization_id == user.organization_id))
     if company is None:
         raise HTTPException(404, "Empresa não encontrada")
+    await require_company(user, session, company_id, "reports.read")
     base_count = await session.scalar(select(func.count()).select_from(Company).where(
         Company.organization_id == user.organization_id,
         Company.cnpj_base == company.cnpj_base))
@@ -76,6 +78,7 @@ async def comparison(company_id: str, period: str,
         Company.id == company_id, Company.organization_id == user.organization_id))
     if company is None:
         raise HTTPException(404, "Empresa não encontrada")
+    await require_company(user, session, company_id, "reports.read")
     companies_at_base = await session.scalar(select(func.count()).select_from(Company).where(
         Company.organization_id == user.organization_id,
         Company.cnpj_base == company.cnpj_base))
