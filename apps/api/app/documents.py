@@ -19,6 +19,7 @@ from app.config import get_settings
 from app.db import get_session
 from app.models import AgentCredential, AuditEvent, Company, FiscalDocument, User, now
 from app.security import admin_only, bearer, current_user
+from app.access import accessible_companies, require_company, require_permission
 from app.storage import BlobStore
 from app.xml_parser import parse_fiscal_xml
 
@@ -126,8 +127,7 @@ async def ingest_identity(company_id: str,
             raise HTTPException(403, "Agente sem acesso à empresa")
         return agent.organization_id, f"agent:{agent.id}", agent
     user = await current_user(credentials, session)
-    if user.role != "admin":
-        raise HTTPException(403, "Privilégio de administração requerido")
+    await require_company(user, session, company_id, "documents.ingest")
     return user.organization_id, user.id, None
 
 
@@ -231,8 +231,13 @@ async def list_documents(company_id: str | None = None, cursor: str | None = Non
     if cursor is not None and (not cursor.isdecimal() or int(cursor) > 1_000_000):
         raise HTTPException(422, "Cursor inválido")
     offset = int(cursor or "0")
+    await require_permission(user, session, "documents.read")
+    allowed = await accessible_companies(user, session)
     stmt = select(FiscalDocument).where(FiscalDocument.organization_id == user.organization_id)
+    if allowed is not None:
+        stmt = stmt.where(FiscalDocument.company_id.in_(allowed))
     if company_id:
+        await require_company(user, session, company_id, "documents.read")
         stmt = stmt.where(FiscalDocument.company_id == company_id)
     values = (await session.scalars(stmt.order_by(FiscalDocument.created_at.desc(),
         FiscalDocument.id.desc()).offset(offset).limit(limit + 1))).all()
@@ -247,6 +252,7 @@ async def download_document(document_id: str, user: User = Depends(current_user)
         FiscalDocument.id == document_id, FiscalDocument.organization_id == user.organization_id))
     if document is None:
         raise HTTPException(404, "Documento não encontrado")
+    await require_company(user, session, document.company_id, "documents.read")
     try:
         data = await BlobStore(get_settings()).get_document(
             user.organization_id, document.company_id, document.raw_key,

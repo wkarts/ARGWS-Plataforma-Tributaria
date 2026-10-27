@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.models import Company, FiscalDocument, Query, Record, User
 from app.security import current_user
+from app.access import require_company
 
 router = APIRouter(prefix="/api/v1", tags=["central-reforma"])
 
@@ -24,6 +25,7 @@ async def owned_company(session: AsyncSession, user: User, company_id: str) -> C
     ))
     if company is None:
         raise HTTPException(404, "Empresa não encontrada")
+    await require_company(user, session, company_id, "reports.read")
     return company
 
 

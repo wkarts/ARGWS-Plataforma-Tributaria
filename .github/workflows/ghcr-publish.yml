@@ -297,7 +297,7 @@ jobs:
                           'deploy/env.production.example', 'deploy/README.md',
                           'scripts/deploy.sh', 'scripts/preflight.py',
                           'scripts/sync_deploy_env.py', 'tools/deployer/deployer.py',
-                          'tools/deployer/release_catalog.py', 'VERSION'}
+                          'tools/deployer/release_catalog.py', 'tools/deployer/integrations.py', 'VERSION'}
               for target in ('', 'docker/', 'dockge/', 'portainer/', 'cloudpanel/'):
                   for channel in ('develop', 'production'):
                       root = f'deploy/{target}{channel}/'

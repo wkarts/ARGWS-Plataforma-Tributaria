@@ -17,6 +17,10 @@ import type {
   Resource,
   StockCreditClaim,
   User,
+  ManagedUser,
+  AccessGroup,
+  MailStatus,
+  CnpjLookup,
   CentralSummary,
   CentralHistory,
   TaxCalculation,
@@ -123,10 +127,10 @@ export class ApiClient {
     }
   }
 
-  login(username: string, password: string) {
+  login(username: string, password: string, otp?: string) {
     return this.request<{ access_token: string; token_type: string }>(
       "/auth/login",
-      { method: "POST", body: JSON.stringify({ username, password }) },
+      { method: "POST", body: JSON.stringify({ username, password, otp }) },
       false,
     );
   }
@@ -150,6 +154,105 @@ export class ApiClient {
     const params = new URLSearchParams({ company_id: companyId, environment });
     return this.request<Coverage>(`/coverage?${params.toString()}`);
   }
+  accountAccess() {
+    return this.request<{ permission_keys: string[]; company_ids: string[] | null }>("/auth/access");
+  }
+  requestPasswordReset(email: string) {
+    return this.request<{ accepted: boolean }>("/auth/password-reset/request", {
+      method: "POST", body: JSON.stringify({ email }),
+    }, false);
+  }
+  completeAccountToken(token: string, password: string) {
+    return this.request<{ updated: boolean }>("/auth/token/complete", {
+      method: "POST", body: JSON.stringify({ token, password }),
+    }, false);
+  }
+  permissionsCatalog() {
+    return this.request<{ permissions: string[]; roles: string[] }>("/admin/permissions");
+  }
+  adminUsers() {
+    return this.request<{ items: ManagedUser[] }>("/admin/users");
+  }
+  createUser(data: Record<string, unknown>) {
+    return this.request<ManagedUser>("/admin/users", {
+      method: "POST", body: JSON.stringify(data),
+    });
+  }
+  editUser(uid: string, data: Record<string, unknown>) {
+    return this.request<ManagedUser>("/admin/users/" + encodeURIComponent(uid), {
+      method: "PATCH", body: JSON.stringify(data),
+    });
+  }
+  disableUser(uid: string) {
+    return this.request<{ disabled: boolean }>("/admin/users/" + encodeURIComponent(uid), {
+      method: "DELETE",
+    });
+  }
+  inviteUser(uid: string) {
+    return this.request<{ sent: boolean }>("/admin/users/" + encodeURIComponent(uid) + "/invite", {
+      method: "POST",
+    });
+  }
+  adminGroups() {
+    return this.request<{ items: AccessGroup[] }>("/admin/groups");
+  }
+  saveGroup(data: Record<string, unknown>, id?: string) {
+    return this.request<AccessGroup>(id
+      ? "/admin/groups/" + encodeURIComponent(id) : "/admin/groups", {
+      method: id ? "PUT" : "POST", body: JSON.stringify(data),
+    });
+  }
+  deleteGroup(id: string) {
+    return this.request<{ deleted: boolean }>("/admin/groups/" + encodeURIComponent(id), {
+      method: "DELETE",
+    });
+  }
+  smtpStatus() {
+    return this.request<MailStatus>("/admin/mail/status");
+  }
+  smtpTest() {
+    return this.request<{ sent: boolean; recipient: string }>("/admin/mail/test", { method: "POST" });
+  }
+  updateProfile(data: { full_name: string; position: string }) {
+    return this.request<User>("/profile", {
+      method: "PATCH", body: JSON.stringify(data),
+    });
+  }
+  uploadProfilePhoto(file: File) {
+    const data = new FormData();
+    data.append("file", file, file.name);
+    return this.request<{ updated: boolean; avatar_updated_at: string }>("/profile/photo", {
+      method: "POST", body: data,
+    });
+  }
+  async profilePhoto(id: string): Promise<Blob | null> {
+    const response = await fetch(base + "/profile/photo/" + encodeURIComponent(id), {
+      headers: { Authorization: "Bearer " + (this.token() || "") },
+      credentials: "same-origin", cache: "no-store",
+    });
+    if (response.status === 404) return null;
+    if (!response.ok) throw new ApiError("Não foi possível carregar a foto", response.status);
+    return response.blob();
+  }
+  setup2fa(current_password: string) {
+    return this.request<{ secret: string; otpauth_uri: string }>("/profile/2fa/setup", {
+      method: "POST", body: JSON.stringify({ current_password }),
+    });
+  }
+  confirm2fa(code: string) {
+    return this.request<{ enabled: boolean; recovery_codes: string[] }>("/profile/2fa/confirm", {
+      method: "POST", body: JSON.stringify({ code }),
+    });
+  }
+  disable2fa(current_password: string, code: string) {
+    return this.request<{ enabled: boolean }>("/profile/2fa/disable", {
+      method: "POST", body: JSON.stringify({ current_password, code }),
+    });
+  }
+  lookupCnpj(cnpj: string) {
+    return this.request<CnpjLookup>("/companies/cnpj/" + encodeURIComponent(cnpj) + "/lookup");
+  }
+
   companies() {
     return this.request<ListResponse<Company>>("/companies");
   }
