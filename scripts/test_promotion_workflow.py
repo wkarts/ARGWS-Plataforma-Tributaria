@@ -31,6 +31,11 @@ class PromotionWorkflowTests(unittest.TestCase):
                        "pull-requests: write"):
             self.assertIn(marker, workflow)
 
+    def test_only_version_metadata_can_be_auto_resolved(self):
+        workflow = (ROOT / ".github/workflows/develop-to-main-pr.yml").read_text(encoding="utf-8")
+        self.assertIn("scripts/resolve_release_merge.py --source origin/develop", workflow)
+        self.assertNotIn('git merge --no-ff --no-edit origin/develop; then', workflow)
+
     def test_branch_protection_is_not_bypassed(self):
         workflow = (ROOT / ".github/workflows/develop-to-main-pr.yml").read_text(encoding="utf-8")
         for forbidden in ("git push --force", "--force-with-lease", "gh pr merge --admin",

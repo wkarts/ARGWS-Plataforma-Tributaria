@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-        with: {persist-credentials: false}
+        with: {persist-credentials: false, fetch-depth: 0}
       - uses: actions/setup-python@v5
         with: {python-version: '3.13'}
       - name: Validate version, deploy matrix and Compose semantics
@@ -27,6 +27,15 @@ jobs:
           bash -n scripts/*.sh
       - name: Validate image names, base manifest and protected cleanup policy
         run: python3 scripts/validate_release.py
+      - name: Check that PR changes merge cleanly with main before publish
+        if: github.event_name == 'pull_request' && github.base_ref == 'develop'
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if ! git merge-tree --write-tree origin/main HEAD >/dev/null; then
+            echo "::error::A PR conflita com main. Reconcile os históricos antes de integrar na develop."
+            exit 1
+          fi
   backend:
     runs-on: ubuntu-latest
     timeout-minutes: 20

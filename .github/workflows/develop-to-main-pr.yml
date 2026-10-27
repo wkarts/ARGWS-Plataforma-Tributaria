@@ -193,10 +193,9 @@ jobs:
             git checkout -B "$branch" origin/main
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            if ! git merge --no-ff --no-edit origin/develop; then
-              git merge --abort || true
-              echo "::error::Conflito no merge develop/main; promoção interrompida"; exit 1;
-            fi
+            # Only version metadata is conflict-resolvable, with a synchronized
+            # SemVer immediately after this merge. Unknown conflicts fail closed.
+            python3 scripts/resolve_release_merge.py --source origin/develop
             python3 scripts/version.py set "$target_version"
             python3 scripts/version.py check
             python3 scripts/validate_release.py
