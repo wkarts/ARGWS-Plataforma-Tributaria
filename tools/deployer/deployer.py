@@ -587,6 +587,19 @@ def update_provider_mode(directory: Path, *, mode: str, confirmed: bool) -> dict
     }
 
 
+def integration_settings(directory: Path) -> dict:
+    """Return non-secret configuration for the GUI; never return passwords."""
+    directory = directory.expanduser().resolve()
+    if directory.is_symlink() or not (directory / ENV_NAME).is_file():
+        raise DeployerError("O .env da instalação não foi encontrado.")
+    values = parse_env((directory / ENV_NAME).read_text(encoding="utf-8"))
+    channel = "develop" if values.get("APP_ENV") == "development" else values.get("APP_ENV", "production")
+    from integrations import ALLOWED_KEYS, SECRET_KEYS
+    return {"values": {key: values.get(key, "") for key in ALLOWED_KEYS - SECRET_KEYS},
+            "secrets_configured": {key: bool(values.get(key)) for key in SECRET_KEYS},
+            "integrations": integration_status(values, channel)}
+
+
 def configure(directory: Path, updates: dict, *, confirmed: bool) -> dict:
     """Patch only allowlisted Receita/SMTP fields, always preserving a private backup."""
     if not confirmed:
@@ -718,7 +731,7 @@ def make_parser() -> argparse.ArgumentParser:
             item.add_argument("--admin-email", required=True, help="E-mail do administrador inicial")
             item.add_argument("--force", action="store_true", help="Atualizar o Compose e preservar integralmente o .env")
     for name in ("validate", "status", "deploy", "upgrade", "rollback", "recover",
-                 "export", "provider-update", "configure"):
+                 "export", "provider-update", "configure", "integration-settings"):
         item = commands.add_parser(name)
         item.add_argument("--directory", required=True, type=Path)
         if name in ("deploy", "upgrade", "rollback", "recover", "provider-update"):
@@ -764,6 +777,8 @@ def main(argv: list[str] | None = None) -> int:
             output = update_provider_mode(args.directory, mode=args.mode, confirmed=args.yes)
         elif args.command == "configure":
             output = configure(args.directory, read_config_stdin(), confirmed=args.yes)
+        elif args.command == "integration-settings":
+            output = integration_settings(args.directory)
         elif args.command == "deploy":
             output = deploy(args.directory, confirmed=args.yes)
         elif args.command == "rollback":
