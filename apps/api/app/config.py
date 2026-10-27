@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     deployment_mode: str = "central"
+    app_env: str = "development"
     self_data_dir: str = "./data"
 
     postgres_host: str = "localhost"
@@ -37,7 +38,7 @@ class Settings(BaseSettings):
     bootstrap_admin_email: str = ""
     bootstrap_admin_password: str = ""
     bootstrap_admin_password_file: str = ""
-    provider_mode: str = "fixture"
+    provider_mode: str = "disabled"
     cbs_restricted_enabled: bool = False
     cbs_production_enabled: bool = False
     cbs_payments_enabled: bool = False
@@ -57,6 +58,22 @@ class Settings(BaseSettings):
     tax_calculator_regular_version_url: str = ""
     tax_calculator_simples_url: str = ""
     tax_calculator_simples_version_url: str = ""
+
+    # Public CNPJ registry lookup; not an official authenticated Receita service.
+    cnpj_lookup_enabled: bool = True
+    smtp_enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_starttls: bool = True
+    smtp_ssl: bool = False
+    app_public_url: str = ""
+
+    @property
+    def smtp_ready(self) -> bool:
+        return (self.smtp_enabled and bool(self.smtp_host and self.smtp_from and self.app_public_url))
 
     @model_validator(mode="after")
     def resolve_secret_files(self) -> "Settings":
@@ -111,6 +128,27 @@ class Settings(BaseSettings):
     def validate_security(self) -> None:
         if self.deployment_mode not in {"central", "self"}:
             raise RuntimeError("DEPLOYMENT_MODE inválido")
+        if self.app_env not in {"production", "development", "develop", "test"}:
+            raise RuntimeError("APP_ENV inválido")
+        if self.app_env == "production" and self.provider_mode == "fixture":
+            raise RuntimeError("Produção não pode utilizar PROVIDER_MODE=fixture; configure disabled ou receita com credenciais oficiais")
+        if self.smtp_enabled:
+            from urllib.parse import urlsplit
+            from email.utils import parseaddr
+            from re import fullmatch
+            base = urlsplit(self.app_public_url)
+            if (not self.smtp_host or any(char in self.smtp_host for char in "\r\n /:@")
+                    or not 1 <= self.smtp_port <= 65535
+                    or self.smtp_starttls and self.smtp_ssl
+                    or (self.smtp_username and not self.smtp_password)
+                    or (self.smtp_password and not self.smtp_username)
+                    or self.smtp_username and not (self.smtp_starttls or self.smtp_ssl)
+                    or base.scheme != "https" or not base.hostname
+                    or base.username or base.password or base.query or base.fragment
+                    or base.path not in ("", "/")
+                    or parseaddr(self.smtp_from)[1] != self.smtp_from
+                    or not fullmatch(r"[^\\s@]+@[^\\s@]+\\.[^\\s@]+", self.smtp_from)):
+                raise RuntimeError("SMTP requer host/porta/TLS, remetente válido e APP_PUBLIC_URL HTTPS configurados")
         if self.self_hosted:
             if self.database_url_override:
                 raise RuntimeError("No modo self configure SELF_DATA_DIR, não DATABASE_URL_OVERRIDE")

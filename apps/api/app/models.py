@@ -86,6 +86,24 @@ class Company(Base):
     name: Mapped[str] = mapped_column(String(180))
     cnpj: Mapped[str] = mapped_column(String(14))
     cnpj_base: Mapped[str] = mapped_column(String(8), index=True)
+    trade_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    registry_status: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    state: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    address: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    registry_source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    registry_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class AccountAction(Base):
+    """One-time invitation or password reset; plaintext token never persisted."""
+    __tablename__ = "account_actions"
+    digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    purpose: Mapped[str] = mapped_column(String(20))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
