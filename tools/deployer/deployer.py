@@ -549,6 +549,43 @@ def recover(directory: Path, *, backup_id: str | None, confirmed: bool) -> dict:
     return {"restored": chosen.name, "directory": str(directory), "files": sorted(files)}
 
 
+def update_provider_mode(directory: Path, *, mode: str, confirmed: bool) -> dict:
+    """Modify only PROVIDER_MODE in an existing stack, preserving every secret."""
+    if not confirmed:
+        raise DeployerError("Confirme a alteração de provedor (--yes).")
+    directory = directory.expanduser().resolve()
+    compose_path, env_path = directory / "compose.yaml", directory / ENV_NAME
+    if (not compose_path.is_file() or not env_path.is_file()
+            or compose_path.is_symlink() or env_path.is_symlink()):
+        raise DeployerError("A pasta deve conter compose.yaml e .env regulares.")
+    original = env_path.read_text(encoding="utf-8")
+    values = parse_env(original)
+    channel = "develop" if values.get("APP_ENV") == "development" else values.get("APP_ENV", "production")
+    selected_provider(mode, channel, original)
+    if values.get("PROVIDER_MODE", "disabled") == mode:
+        return {"changed": False, "provider_mode": mode, "backup_id": None}
+    if "PROVIDER_MODE" in values:
+        updated = replace_env_values(original, {"PROVIDER_MODE": mode})
+    else:
+        updated = original.rstrip("\n") + "\nPROVIDER_MODE=" + mode + "\n"
+    validate_content(compose_path.read_text(encoding="utf-8"), updated,
+                     expected_channel=channel)
+    backup = backup_files(directory, "provider-mode")
+    atomic_write(env_path, updated.encode("utf-8"))
+    missing = ([key for key in ("CBS_TOKEN_URL", "CBS_CLIENT_ID", "CBS_CLIENT_SECRET",
+                               "CBS_WEBHOOK_BASE_URL", "CBS_ALLOWED_BASES",
+                               "CBS_CREDENTIAL_ORGANIZATION_ID")
+                if not parse_env(updated).get(key)] if mode == "receita" else [])
+    return {
+        "changed": True, "provider_mode": mode, "backup_id": backup,
+        "missing_configuration": missing,
+        "note": ("Modo Receita selecionado; credenciais e ambientes devem ser validados "
+                 "pela API antes de liberar consultas oficiais."
+                 if mode == "receita" else
+                 "Integração oficial desabilitada; recursos locais permanecem acessíveis."),
+    }
+
+
 def status(directory: Path) -> dict:
     directory = directory.expanduser().resolve()
     config = validate_directory(directory)
@@ -651,11 +688,14 @@ def make_parser() -> argparse.ArgumentParser:
             item.add_argument("--output", required=True, type=Path)
             item.add_argument("--admin-email", required=True, help="E-mail do administrador inicial")
             item.add_argument("--force", action="store_true", help="Atualizar o Compose e preservar integralmente o .env")
-    for name in ("validate", "status", "deploy", "upgrade", "rollback", "recover", "export"):
+    for name in ("validate", "status", "deploy", "upgrade", "rollback", "recover",
+                 "export", "provider-update"):
         item = commands.add_parser(name)
         item.add_argument("--directory", required=True, type=Path)
-        if name in ("deploy", "upgrade", "rollback", "recover"):
+        if name in ("deploy", "upgrade", "rollback", "recover", "provider-update"):
             item.add_argument("--yes", action="store_true", help="Confirmar operação local")
+        if name == "provider-update":
+            item.add_argument("--mode", choices=PROVIDER_MODES, required=True)
         if name in ("upgrade", "rollback"):
             item.add_argument("--tag", help="Tag SemVer estável ou sha-<12 hex> já publicada")
         if name == "recover":
@@ -687,6 +727,8 @@ def main(argv: list[str] | None = None) -> int:
             output = validate_directory(args.directory)
         elif args.command == "status":
             output = status(args.directory)
+        elif args.command == "provider-update":
+            output = update_provider_mode(args.directory, mode=args.mode, confirmed=args.yes)
         elif args.command == "deploy":
             output = deploy(args.directory, confirmed=args.yes)
         elif args.command == "rollback":
