@@ -66,6 +66,9 @@ assert "if: needs.source.outputs.channel == 'main'" in workflow
 assert 'group: fiscal-publish-${{ github.ref }}-${{ github.sha }}' in workflow
 assert 'cancel-in-progress: false' in workflow
 assert 'v${VERSION}-develop.${GITHUB_SHA::12}' in publisher
+assert 'gh release create "$preview_tag" --verify-tag' in publisher
+assert 'refs/tags/$preview_tag' in publisher
+assert publisher.index('refs/tags/$preview_tag') < publisher.index('gh release create "$preview_tag" --verify-tag')
 assert 'gh release edit "$preview_tag" --prerelease --draft=false' in publisher
 assert 'gh release download "$preview_tag" --dir "$verified"' in publisher
 assert 'gh release upload pre-release "$files"/* --clobber' in publisher
