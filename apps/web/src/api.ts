@@ -19,8 +19,9 @@ import type {
   User,
   CentralSummary,
   CentralHistory,
-  ReformSimulation,
-  ReformSimulationInput,
+  TaxCalculation,
+  TaxCalculationInput,
+  TaxCalculationStatus,
 } from "./types.ts";
 
 declare global {
@@ -296,10 +297,25 @@ export class ApiClient {
     return this.request<CentralHistory>(`/central/history?${params.toString()}`);
   }
 
-  simulateReform(payload: ReformSimulationInput) {
-    return this.request<ReformSimulation>("/simulations", {
+  calculatorStatus() {
+    return this.request<TaxCalculationStatus>("/tax-calculator/status");
+  }
+
+  taxCalculations(companyId: string, cursor?: string) {
+    const params = new URLSearchParams({ company_id: companyId });
+    if (cursor) params.set("cursor", cursor);
+    return this.request<ListResponse<TaxCalculation>>(`/tax-calculations?${params.toString()}`);
+  }
+
+  taxCalculation(id: string) {
+    return this.request<TaxCalculation>(`/tax-calculations/${encodeURIComponent(id)}`);
+  }
+
+  calculateTax(input: TaxCalculationInput, idempotencyKey: string) {
+    return this.request<TaxCalculation>("/tax-calculations", {
       method: "POST",
-      body: JSON.stringify(payload),
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(input),
     });
   }
 
