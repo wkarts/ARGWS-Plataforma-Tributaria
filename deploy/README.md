@@ -15,6 +15,14 @@ RustFS 1.0.1 é o serviço S3 compatível usado no primeiro deploy. A imagem com
 
 Cada diretório é autossuficiente: `compose.yaml` e `.env.example`. As configurações de serviço estão no próprio Compose com interpolação `${VAR}`; no Portainer, forneça as mesmas variáveis pela interface de Stack ou por `.env` disponível ao projeto. `scripts/generate_deploys.py` é o gerador; `scripts/validate_deploys.py --docker` compara os dez diretórios e executa `docker compose config --quiet` em cada um. Não edite uma cópia isoladamente.
 
+## Redis e validação do Docker Compose
+
+O Redis usa `entrypoint: ["/bin/sh", "-ec"]` com `command` na forma de **lista com um único bloco de script**. Não use `command: 'umask ...; exec ...'`: o Docker Compose pode fragmentá-lo em vários argumentos, fazendo o shell executar apenas `umask` e reiniciar em loop. O healthcheck utiliza a senha já configurada, sem expor a porta Redis na internet.
+
+Antes de subir a stack, execute `docker compose --env-file .env -f compose.yaml config --format json` e confirme `services.redis.command` como array de um único elemento contendo todas as linhas até `exec redis-server`. Em CI, `scripts/validate_deploys.py --docker` verifica os dez modelos após interpolação, e um smoke independente inicia **apenas o Redis** num projeto descartável do GitHub Actions, confere `healthy` e `PONG`.
+
+A correção troca somente o `command` do Redis. **Não altere `.env`, volumes, senhas, bancos nem a imagem Redis** ao aplicar. No Dockge, substitua o `compose.yaml` e recrie a stack sem `down --volumes`.
+
 ## Imagens e canais
 Após a pré-release ser publicada e validada em `develop`, o workflow de promoção prepara o próximo SemVer livre, gera uma PR para `main`, executa CI na branch de release, faz o merge e despacha o build estável automaticamente. O processo não instala versões nos hosts dos clientes. Consulte `docs/PROMOCAO-DEVELOP-MAIN.md`.
 

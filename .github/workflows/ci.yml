@@ -27,6 +27,33 @@ jobs:
           bash -n scripts/*.sh
       - name: Validate image names, base manifest and protected cleanup policy
         run: python3 scripts/validate_release.py
+      - name: Start actual Redis container and verify health with Docker Compose
+        shell: bash
+        run: |
+          set -euo pipefail
+          export COMPOSE_PROJECT_NAME="fiscalredistest-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          export IMAGE_OWNER="wkarts"
+          export APP_TAG="v$(cat VERSION)"
+          export SECRET_KEY="ci-only-not-a-real-secret-123456789012345"
+          export BOOTSTRAP_ADMIN_EMAIL="admin@example.invalid"
+          export BOOTSTRAP_ADMIN_PASSWORD="ci-only-not-a-real-password-123456789"
+          export POSTGRES_PASSWORD="ci-only-not-a-real-postgres-password"
+          export REDIS_PASSWORD="ci-only-not-a-real-redis-password"
+          export RABBITMQ_DEFAULT_PASS="ci-only-not-a-real-rabbit-password"
+          export S3_ACCESS_KEY="ci-only-s3-access"
+          export S3_SECRET_KEY="ci-only-s3-secret-123456789012"
+          compose=(docker compose -p "$COMPOSE_PROJECT_NAME" -f deploy/docker/production/compose.yaml)
+          trap '"${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true' EXIT
+          "${compose[@]}" up -d --no-deps --wait redis
+          id="$("${compose[@]}" ps -q redis)"
+          test -n "$id"
+          docker inspect --format '{{json .Config.Cmd}}' "$id" | python3 -c '
+          import json,sys
+          command=json.load(sys.stdin)
+          assert isinstance(command,list) and len(command)==1, "Redis shell script must be one argv entry"
+          assert "exec redis-server" in command[0], "Redis executable was not invoked"
+          '
+          docker exec "$id" sh -ec 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli ping' | grep -Fx 'PONG'
       - name: Check that PR changes merge cleanly with main before publish
         if: github.event_name == 'pull_request' && github.base_ref == 'develop'
         run: |

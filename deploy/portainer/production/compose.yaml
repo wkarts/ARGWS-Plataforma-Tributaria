@@ -150,7 +150,11 @@ services:
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Defina REDIS_PASSWORD}
     entrypoint: ["/bin/sh", "-ec"]
-    command: 'umask 077; printf "requirepass %s\n" "$$REDIS_PASSWORD" > /tmp/redis.conf; exec redis-server /tmp/redis.conf --appendonly yes'
+    command:
+      - |
+        umask 077
+        printf 'requirepass %s\n' "$$REDIS_PASSWORD" > /tmp/redis.conf
+        exec redis-server /tmp/redis.conf --appendonly yes
     volumes: ["redis_data:/data"]
     restart: unless-stopped
     networks: [internal]
