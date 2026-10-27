@@ -26,6 +26,7 @@ class BuildDeployMatrixTests(unittest.TestCase):
                 self.assertFalse(any(item.filename.endswith("/.env") for item in archive.infolist()))
                 self.assertEqual(set(archive.namelist()), set(collect().keys()))
                 self.assertIn("tools/deployer/release_catalog.py", archive.namelist())
+                self.assertIn("tools/deployer/integrations.py", archive.namelist())
                 for target in ("", "docker/", "dockge/", "portainer/", "cloudpanel/"):
                     for channel in ("develop", "production"):
                         root = f"deploy/{target}{channel}/"

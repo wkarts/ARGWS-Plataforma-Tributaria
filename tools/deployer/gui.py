@@ -50,10 +50,10 @@ def installation_title() -> str:
     return "Gestão Fiscal"
 
 
-def run_backend(arguments: list[str]) -> tuple[int, str]:
+def run_backend(arguments: list[str], input_text: str | None = None) -> tuple[int, str]:
     command = backend_command()
     result = subprocess.run(
-        [*command, *arguments], text=True, encoding="utf-8",
+        [*command, *arguments], text=True, encoding="utf-8", input=input_text,
         errors="replace", capture_output=True, timeout=360,
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         check=False,
@@ -112,6 +112,21 @@ class DeployerWindow(tk.Tk):
             "force": tk.BooleanVar(value=False),
             "catalog_status": tk.StringVar(value="Consultando versões publicadas…"),
         }
+        # No credentials are prefilled from an existing .env; empty secret entries
+        # mean preserve the saved secret during an update.
+        for name, value in {
+            "CBS_TOKEN_URL": "", "CBS_CLIENT_ID": "", "CBS_CLIENT_SECRET": "",
+            "CBS_WEBHOOK_BASE_URL": "", "CBS_CREDENTIAL_ORGANIZATION_ID": "",
+            "CBS_ALLOWED_BASES": "", "CBS_RESTRICTED_ENABLED": "false",
+            "CBS_PRODUCTION_ENABLED": "false", "CBS_PAYMENTS_ENABLED": "false",
+            "CBS_AUTO_SYNC_ENABLED": "false", "CBS_AUTO_SYNC_ENVIRONMENT": "restricted",
+            "CBS_AUTO_SYNC_RESOURCES": "debitos,creditos",
+            "SMTP_ENABLED": "false", "SMTP_HOST": "", "SMTP_PORT": "587",
+            "SMTP_USERNAME": "", "SMTP_PASSWORD": "", "SMTP_FROM": "",
+            "SMTP_REPLY_TO": "", "SMTP_STARTTLS": "true", "SMTP_SSL": "false",
+            "APP_PUBLIC_URL": "", "CNPJ_LOOKUP_ENABLED": "true",
+        }.items():
+            self.vars[name] = tk.StringVar(value=value)
         self._build()
         self.vars["provider_mode"].trace_add("write", self._mode_changed)
         self._mode_changed()
@@ -130,10 +145,14 @@ class DeployerWindow(tk.Tk):
         ).pack(anchor="w", pady=(2, 14))
 
         tabs = ttk.Notebook(outer)
-        tabs.pack(fill="x")
+        tabs.pack(fill="both", expand=True)
         setup = ttk.Frame(tabs, padding=14)
+        receipt = ttk.Frame(tabs, padding=14)
+        smtp = ttk.Frame(tabs, padding=14)
         operation = ttk.Frame(tabs, padding=14)
         tabs.add(setup, text="Preparar stack")
+        tabs.add(receipt, text="Receita / CBS")
+        tabs.add(smtp, text="E-mail / SMTP")
         tabs.add(operation, text="Operar e recuperar")
         self._combo(setup, "Plataforma", "target", TARGETS, 0, readonly=True)
         self._combo(setup, "Canal", "channel", CHANNELS, 1, readonly=True)
@@ -185,6 +204,62 @@ class DeployerWindow(tk.Tk):
             wraplength=710, foreground="#526577",
         ).grid(row=12, column=0, columnspan=3, sticky="w", pady=(0, 8))
 
+        ttk.Label(
+            receipt,
+            text="A Receita só será consultada após credenciais, autorização de CNPJ e callback HTTPS.",
+            wraplength=700, foreground="#526577",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        receita_fields = (
+            ("CBS_TOKEN_URL", "Endpoint OAuth oficial", False),
+            ("CBS_CLIENT_ID", "Client ID autorizado", False),
+            ("CBS_CLIENT_SECRET", "Client secret (protegido)", True),
+            ("CBS_WEBHOOK_BASE_URL", "URL pública do callback HTTPS", False),
+            ("CBS_CREDENTIAL_ORGANIZATION_ID", "Organização credenciada (ID)", False),
+            ("CBS_ALLOWED_BASES", "Raízes CNPJ autorizadas (separadas por vírgula)", False),
+        )
+        for row, (key, label, secret) in enumerate(receita_fields, start=1):
+            self._entry(receipt, label, key, row, secret=secret)
+        options = (
+            ("CBS_RESTRICTED_ENABLED", "Habilitar ambiente restrito"),
+            ("CBS_PRODUCTION_ENABLED", "Habilitar CBS produção"),
+            ("CBS_PAYMENTS_ENABLED", "Habilitar pagamentos/recolhimentos"),
+            ("CBS_AUTO_SYNC_ENABLED", "Sincronização periódica opt-in"),
+        )
+        for row, (key, label) in enumerate(options, start=7):
+            self._bool_combo(receipt, label, key, row)
+        self._entry(receipt, "Ambiente auto-sync (restricted / production)",
+                    "CBS_AUTO_SYNC_ENVIRONMENT", 11)
+        self._entry(receipt, "Recursos auto-sync", "CBS_AUTO_SYNC_RESOURCES", 12)
+        ttk.Label(
+            receipt,
+            text="disabled = operação local sem Receita. receita = integração oficial. "
+                 "fixture = dados simulados, apenas no canal develop. Credenciais incompletas "
+                 "não geram resultados fictícios nem impedem login/cadastro.",
+            wraplength=720, foreground="#526577",
+        ).grid(row=13, column=0, columnspan=2, sticky="w")
+
+        self._bool_combo(smtp, "Habilitar envio de e-mails", "SMTP_ENABLED", 0)
+        smtp_fields = (
+            ("SMTP_HOST", "Servidor SMTP", False),
+            ("SMTP_PORT", "Porta SMTP", False),
+            ("SMTP_USERNAME", "Usuário de autenticação SMTP", False),
+            ("SMTP_PASSWORD", "Senha SMTP (protegida)", True),
+            ("SMTP_FROM", "Remetente (e-mail)", False),
+            ("SMTP_REPLY_TO", "Responder para (opcional)", False),
+            ("APP_PUBLIC_URL", "URL pública HTTPS (ex.: https://fiscal.exemplo.com.br)", False),
+        )
+        for row, (key, label, secret) in enumerate(smtp_fields, start=1):
+            self._entry(smtp, label, key, row, secret=secret)
+        self._bool_combo(smtp, "STARTTLS (587)", "SMTP_STARTTLS", 8)
+        self._bool_combo(smtp, "TLS implícito (465)", "SMTP_SSL", 9)
+        self._bool_combo(smtp, "Consulta pública CNPJ via BrasilAPI", "CNPJ_LOOKUP_ENABLED", 10)
+        ttk.Label(
+            smtp, text="Convites, recuperação e testes usam as credenciais deste SMTP. "
+                       "Senhas vazias na edição preservam as existentes. "
+                       "Clique em Salvar integrações para atualizar o .env com backup.",
+            wraplength=720, foreground="#526577",
+        ).grid(row=11, column=0, columnspan=2, sticky="w", pady=(7, 0))
+
         self._entry(operation, "Tag de rollback (opcional)", "rollback_tag", 0)
         ttk.Label(
             operation, text="Deploy local requer Docker Compose neste computador. "
@@ -206,6 +281,8 @@ class DeployerWindow(tk.Tk):
             ("Atualizar versão", self.upgrade), ("Rollback", self.rollback),
             ("Recuperar", self.recover), ("Exportar ZIP", self.export),
             ("Aplicar modo CBS", self.update_provider),
+            ("Carregar configurações", self.load_integrations),
+            ("Salvar integrações", self.configure_integrations),
         )
         for index, (label, action) in enumerate(actions):
             button = ttk.Button(buttons, text=label, command=action)
@@ -225,10 +302,11 @@ class DeployerWindow(tk.Tk):
                    "Informe o e-mail administrativo e clique em Gerar arquivos.")
 
     def _entry(
-        self, parent: ttk.Frame, label: str, key: str, row: int, *, browse: bool = False
+        self, parent: ttk.Frame, label: str, key: str, row: int,
+        *, browse: bool = False, secret: bool = False
     ) -> ttk.Entry:
         ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=(0, 8), pady=5)
-        entry = ttk.Entry(parent, textvariable=self.vars[key])
+        entry = ttk.Entry(parent, textvariable=self.vars[key], show="*" if secret else "")
         entry.grid(row=row, column=1, sticky="ew", pady=5)
         if browse:
             ttk.Button(parent, text="Escolher…", command=self.choose_output).grid(
@@ -247,6 +325,25 @@ class DeployerWindow(tk.Tk):
             state="readonly" if readonly else "normal",
         ).grid(row=row, column=1, sticky="ew", pady=5)
         parent.columnconfigure(1, weight=1)
+
+    def _bool_combo(self, parent: ttk.Frame, label: str, key: str, row: int) -> None:
+        self._combo(parent, label, key, ("false", "true"), row, readonly=True)
+
+    def _integration_options(self) -> dict[str, str]:
+        """Whitelist only field names controlled by the integration tabs."""
+        keys = (
+            "CBS_TOKEN_URL", "CBS_CLIENT_ID", "CBS_CLIENT_SECRET", "CBS_WEBHOOK_BASE_URL",
+            "CBS_CREDENTIAL_ORGANIZATION_ID", "CBS_ALLOWED_BASES",
+            "CBS_RESTRICTED_ENABLED", "CBS_PRODUCTION_ENABLED",
+            "CBS_PAYMENTS_ENABLED", "CBS_AUTO_SYNC_ENABLED",
+            "CBS_AUTO_SYNC_ENVIRONMENT", "CBS_AUTO_SYNC_RESOURCES",
+            "SMTP_ENABLED", "SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD",
+            "SMTP_FROM", "SMTP_REPLY_TO", "SMTP_STARTTLS", "SMTP_SSL",
+            "APP_PUBLIC_URL", "CNPJ_LOOKUP_ENABLED",
+        )
+        options = {key: self.vars[key].get() for key in keys}
+        options["PROVIDER_MODE"] = self.vars["provider_mode"].get()
+        return options
 
     def _mode_changed(self, *_: object) -> None:
         mode = self.vars["provider_mode"].get()
@@ -383,7 +480,7 @@ class DeployerWindow(tk.Tk):
         self.output.insert("1.0", message)
         self.output.configure(state="disabled")
 
-    def _run(self, args: list[str]) -> None:
+    def _run(self, args: list[str], input_data: dict | None = None) -> None:
         if self._running:
             return
         self._running = True
@@ -394,7 +491,7 @@ class DeployerWindow(tk.Tk):
 
         def worker() -> None:
             try:
-                code, message = run_backend(args)
+                code, message = run_backend(args, json.dumps(input_data) if input_data is not None else None)
             except (OSError, FileNotFoundError, subprocess.TimeoutExpired) as exc:
                 code, message = 1, str(exc)
             self.after(0, lambda: self._done(code, message, command))
@@ -409,7 +506,15 @@ class DeployerWindow(tk.Tk):
             data = parsed_backend(message)
             if code:
                 raise ValueError(message or "A operação não foi concluída.")
-            if command == "generate":
+            if command == "integration-settings":
+                settings = data.get("values", {})
+                for key, value in settings.items():
+                    if key in self.vars and key not in {"CBS_CLIENT_SECRET", "SMTP_PASSWORD"}:
+                        self.vars[key].set(str(value))
+                self.vars["provider_mode"].set(str(settings.get("PROVIDER_MODE", "disabled")))
+                self._show("Parâmetros públicos carregados. Senhas permanecem ocultas.\n" +
+                           json.dumps(data.get("integrations", {}), ensure_ascii=False, indent=2))
+            elif command == "generate":
                 folder = Path(str(data["directory"]))
                 compose, env_file = folder / "compose.yaml", folder / ".env"
                 if not compose.is_file() or not env_file.is_file():
@@ -497,8 +602,8 @@ class DeployerWindow(tk.Tk):
             return
         self._run([
             "generate", *args, "--output", folder, "--admin-email", email,
-            *(["--force"] if force else []),
-        ])
+            "--stdin-json", *(["--force"] if force else []),
+        ], self._integration_options())
 
     def validate(self) -> None:
         self._run(["validate", *self._directory_args()])
@@ -525,6 +630,27 @@ class DeployerWindow(tk.Tk):
                 "upgrade", *self._directory_args(), *(["--tag", tag] if tag else []),
                 "--yes",
             ])
+
+    def load_integrations(self) -> None:
+        folder = Path(self.vars["output"].get()).expanduser()
+        if not (folder / ".env").is_file():
+            messagebox.showinfo("Integrações", "Primeiro gere os arquivos da stack.")
+            return
+        self._run(["integration-settings", *self._directory_args()])
+
+    def configure_integrations(self) -> None:
+        folder = Path(self.vars["output"].get()).expanduser()
+        if not (folder / ".env").is_file():
+            messagebox.showinfo("Integrações", "Primeiro gere compose.yaml e .env.")
+            return
+        if messagebox.askyesno(
+            "Atualizar Receita e SMTP",
+            "Salvar os parâmetros no .env com backup e preservação das senhas "
+            "já configuradas? A stack será atualizada somente após redeploy.",
+            icon="warning",
+        ):
+            self._run(["configure", *self._directory_args(), "--stdin-json", "--yes"],
+                      self._integration_options())
 
     def update_provider(self) -> None:
         mode = self.vars["provider_mode"].get()

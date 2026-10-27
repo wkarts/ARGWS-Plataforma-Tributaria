@@ -12,6 +12,56 @@ export interface User {
   id: string;
   username: string;
   role: string;
+  organization_id?: string;
+  full_name?: string;
+  position?: string;
+  active?: boolean;
+  company_access_mode?: "all" | "restricted";
+  permission_keys?: string[];
+  mfa_enabled?: boolean;
+  avatar_updated_at?: string | null;
+}
+
+export interface ManagedUser extends User {
+  group_ids: string[];
+  company_ids: string[];
+  organization_id: string;
+  full_name: string;
+  position: string;
+  active: boolean;
+  company_access_mode: "all" | "restricted";
+  permission_keys: string[];
+  mfa_enabled: boolean;
+}
+
+export interface AccessGroup {
+  id: string;
+  name: string;
+  description: string;
+  permission_keys: string[];
+  company_ids: string[];
+  user_ids: string[];
+}
+
+export interface MailStatus {
+  enabled: boolean;
+  ready: boolean;
+  missing: string[];
+  host?: string;
+  port?: number;
+  sender?: string;
+}
+
+export interface CnpjLookup {
+  cnpj: string;
+  name: string;
+  trade_name: string;
+  status: string;
+  state: string;
+  city: string;
+  address: string;
+  source: string;
+  warning: string;
 }
 
 export interface InstallationBrand {

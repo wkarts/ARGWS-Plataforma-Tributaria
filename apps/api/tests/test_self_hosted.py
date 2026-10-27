@@ -113,7 +113,7 @@ def test_self_setup_login_collect_and_reconcile_without_remote_services(tmp_path
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert connection.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "20261027_0006"
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "20261027_0007"
     if os.name != "nt":
         assert data.stat().st_mode & 0o077 == 0
         assert database.stat().st_mode & 0o077 == 0
