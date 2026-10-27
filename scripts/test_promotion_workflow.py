@@ -11,6 +11,10 @@ class PromotionWorkflowTests(unittest.TestCase):
         self.assertIn('workflows: ["GHCR publish and release"]', workflow)
         self.assertIn("types: [completed]", workflow)
         self.assertIn("branches: [develop]", workflow)
+        self.assertNotIn("  push:\n", workflow.split("permissions:", 1)[0])
+        self.assertIn("Check repository PR creation policy", workflow)
+        self.assertIn("can_approve_pull_request_reviews", workflow)
+        self.assertIn("PROMOTION_PR_TOKEN", workflow)
         self.assertIn("github.event.workflow_run.conclusion == 'success'", workflow)
         self.assertIn("github.event.workflow_run.head_repository.full_name == github.repository", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
@@ -26,6 +30,11 @@ class PromotionWorkflowTests(unittest.TestCase):
                        "PROMOTION_PR_TOKEN || github.token", "actions: write",
                        "pull-requests: write"):
             self.assertIn(marker, workflow)
+
+    def test_only_version_metadata_can_be_auto_resolved(self):
+        workflow = (ROOT / ".github/workflows/develop-to-main-pr.yml").read_text(encoding="utf-8")
+        self.assertIn("scripts/resolve_release_merge.py --source origin/develop", workflow)
+        self.assertNotIn('git merge --no-ff --no-edit origin/develop; then', workflow)
 
     def test_branch_protection_is_not_bypassed(self):
         workflow = (ROOT / ".github/workflows/develop-to-main-pr.yml").read_text(encoding="utf-8")

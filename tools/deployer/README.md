@@ -1,21 +1,23 @@
 # Implantação com interface gráfica
 
-Ferramenta local para preparar modelos Docker Compose na infraestrutura do cliente. O pacote Windows contém a interface gráfica e um executável de operação **interno**, usado pela interface. Extraia o ZIP inteiro, abra `fiscal-deployer-gui-win-x64.exe` e informe o namespace GHCR onde as imagens estão disponíveis. A marca pode ser configurada por instalação em um `branding.json` ao lado da interface, por exemplo `{"name":"Seu Escritório"}`. O padrão é "Gestão Fiscal". O executável interno não é um produto de linha de comando para o usuário final.
+Ferramenta local para preparar modelos Docker Compose na infraestrutura do cliente. O pacote Windows contém a interface gráfica e um executável de operação **interno**, usado pela interface. Extraia o ZIP inteiro e abra `fiscal-deployer-gui-win-x64.exe`. **O owner GHCR e a porta web são detectados automaticamente a partir do modelo**; produção consulta as releases publicadas e oferece a opção `latest`, todas as versões estáveis disponíveis e seleção manual de tag. O cliente não precisa conhecer o namespace ou o número da porta para gerar os arquivos. A marca pode ser configurada por instalação em um `branding.json` ao lado da interface, por exemplo `{"name":"Seu Escritório"}`. O padrão é "Gestão Fiscal". O executável interno não é um produto de linha de comando para o usuário final.
 
 ## Configuração
 
 Na raiz do repositório, execute:
 
 ```bash
-python tools/deployer/deployer.py preview --target docker --channel production --owner sua-organizacao
-python tools/deployer/deployer.py generate --target docker --channel production --owner sua-organizacao \
+python tools/deployer/deployer.py defaults --target docker --channel production
+python tools/deployer/deployer.py versions --target docker --channel production
+python tools/deployer/deployer.py preview --target docker --channel production --tag latest
+python tools/deployer/deployer.py generate --target docker --channel production --tag latest \
   --output ./installation --admin-email admin@example.org
 python tools/deployer/deployer.py validate --directory ./installation
 ```
 
-Alvos: `docker`, `dockge`, `portainer` e `cloudpanel`. Canais: `develop` e `production`. Os oito modelos autossuficientes estão em `deploy/<alvo>/<canal>`. A versão vem exclusivamente de `VERSION`: produção fixa `APP_TAG` nesse SemVer; develop usa `develop`. É possível informar `--tag 0.1.0`, `--tag v0.1.0` ou `--tag sha-012345abcdef` para uma imagem fixa previamente publicada. `--owner` define o namespace GHCR; `--port` aceita 40000–49999 e `--bind` aceita somente loopback.
+Alvos: `docker`, `dockge`, `portainer` e `cloudpanel`. Canais: `develop` e `production`. Os oito modelos autossuficientes estão em `deploy/<alvo>/<canal>`. O padrão automático da GUI para produção é `latest`: consulta as releases estáveis completas no GitHub e **resolve para uma tag fixa, como `v0.3.1`, antes de escrever o `.env`**. Nunca deixa `APP_TAG=latest` mutável no cliente. O seletor permite escolher todas as versões publicadas e digitar manualmente uma tag SemVer ou `sha-<12 hex>`. No canal develop, o padrão é `develop`, com possibilidade de selecionar commits de pré-release pelo SHA. A CLI mantém o comportamento histórico de usar a versão embarcada quando `--tag` for omitida; passe `--tag latest` para consultar automaticamente. Sem acesso ao GitHub, a GUI explica a indisponibilidade do catálogo e permite usar uma tag fixa conhecida; ela não inventa a versão mais recente. O namespace GHCR vem de `IMAGE_OWNER` no modelo; `--owner` é opcional para personalizações autorizadas. A porta vem de `WEB_PORT` (`48080` em produção e `48081` em develop); `--port` permite ajuste de 40000 a 49999 e `--bind` aceita somente loopback.
 
-O gerador escreve `compose.yaml` e `.env`; senhas e chaves aleatórias entram apenas no `.env`, com permissão `0600` em Unix. Informe o e-mail inicial do administrador explicitamente: a senha inicial fica em `BOOTSTRAP_ADMIN_PASSWORD`. Guarde-a antes do primeiro deploy. O gerador não mostra senhas ou chaves no terminal ou na GUI.
+O botão **Gerar arquivos** cria `compose.yaml` e `.env` na pasta escolhida e confirma os dois caminhos na tela. O smoke-test do executável gráfico valida essa geração real e reabre a configuração, sem precisar da rede para o teste. Senhas e chaves aleatórias entram apenas no `.env`, com permissão `0600` em Unix. O único dado não inferido automaticamente é o e-mail inicial do administrador, que deve ser informado explicitamente: a senha inicial fica em `BOOTSTRAP_ADMIN_PASSWORD`. Guarde-a antes do primeiro deploy. O gerador não mostra senhas ou chaves no terminal ou na GUI.
 
 Os modelos fornecidos incluem o serviço local `objectstore` (RustFS), compatível com S3. O deployer gera `S3_ACCESS_KEY` e `S3_SECRET_KEY`; os demais parâmetros `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION` e `S3_USE_SSL` vêm do modelo e são validados. O backend suporta S3 genérico, mas usar um serviço S3 externo exige um modelo Compose ou infraestrutura adaptada e validação própria. A GUI deste pacote prepara os modelos com RustFS local.
 
@@ -26,7 +28,7 @@ Se o destino já tiver `compose.yaml`, use `generate ... --force`. Essa opção 
 ```bash
 python tools/deployer/deployer.py status --directory ./installation
 python tools/deployer/deployer.py deploy --directory ./installation --yes
-python tools/deployer/deployer.py upgrade --directory ./installation --tag 0.1.0 --yes
+python tools/deployer/deployer.py upgrade --directory ./installation --tag latest --yes
 python tools/deployer/deployer.py rollback --directory ./installation --tag 0.1.0 --yes
 python tools/deployer/deployer.py export --directory ./installation --output ./installation.zip
 ```
@@ -50,4 +52,4 @@ python -m PyInstaller --clean --noconfirm --onefile --windowed `
   tools/deployer/gui.py
 ```
 
-Inclua os dois executáveis e este README no mesmo ZIP; publique apenas o pacote gráfico. Smoke interno: `version`, `list`, `generate --target docker --channel production --owner sua-organizacao --output <pasta> --admin-email admin@example.org`, `validate --directory <pasta>`. Smoke da GUI no Windows: `fiscal-deployer-gui-win-x64.exe --smoke-test`.
+Inclua os dois executáveis e este README no mesmo ZIP; publique apenas o pacote gráfico. Smoke interno: `version`, `list`, `defaults`, `generate --target docker --channel production --output <pasta> --admin-email admin@example.org`, `validate --directory <pasta>`. O smoke da GUI no Windows (`fiscal-deployer-gui-win-x64.exe --smoke-test`) usa o executável interno de verdade para **gerar e validar ambos os arquivos** em uma pasta temporária com espaços, sem internet. A compilação deve incluir o módulo Python `release_catalog.py` no worker, e o ZIP final sempre contém os dois executáveis.

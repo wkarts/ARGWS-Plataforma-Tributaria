@@ -20,6 +20,8 @@ import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
+from release_catalog import ReleaseCatalogError, load_catalog
+
 
 TARGETS = ("docker", "dockge", "portainer", "cloudpanel")
 CHANNELS = ("develop", "production")
@@ -72,6 +74,48 @@ def template_path(target: str, channel: str) -> Path:
     if target not in TARGETS or channel not in CHANNELS:
         raise DeployerError("Alvo ou canal inválido.")
     return project_root() / "deploy" / target / channel
+
+
+def defaults(target: str, channel: str) -> dict:
+    """Use the built-in model as authority for the GHCR namespace and web port."""
+    path = template_path(target, channel) / ".env.example"
+    try:
+        env = parse_env(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise DeployerError("Modelos de instalação não encontrados no pacote.") from exc
+    owner = env.get("IMAGE_OWNER", "").strip().lower()
+    port = env.get("WEB_PORT", "")
+    if not OWNER.fullmatch(owner):
+        raise DeployerError("O modelo não possui namespace GHCR válido.")
+    if not port.isdecimal() or not 40000 <= int(port) <= 49999:
+        raise DeployerError("O modelo não possui porta web padrão válida.")
+    return {
+        "target": target, "channel": channel, "owner": owner,
+        "web_port": int(port),
+        "web_bind": env.get("WEB_BIND_ADDRESS", "127.0.0.1"),
+        "embedded_version": product_version(),
+        "default_tag": "latest" if channel == "production" else "develop",
+    }
+
+
+def catalog(target: str, channel: str, owner: str | None = None) -> dict:
+    actual_owner = owner or defaults(target, channel)["owner"]
+    try:
+        return load_catalog(actual_owner, channel)
+    except ReleaseCatalogError as exc:
+        raise DeployerError(str(exc)) from exc
+
+
+def image_tag(target: str, channel: str, owner: str, tag: str | None) -> str:
+    """Resolve latest to a real stable tag before writing a production .env."""
+    if tag == "latest":
+        if channel != "production":
+            return "develop"
+        pinned = catalog(target, "production", owner)["latest"]
+        if not pinned:
+            raise DeployerError("Nenhuma release estável completa foi encontrada no GitHub.")
+        return pinned
+    return tag or ("develop" if channel == "develop" else product_version())
 
 
 def parse_env(content: str) -> dict[str, str]:
@@ -237,7 +281,7 @@ def ensure_directory(directory: Path) -> None:
             raise DeployerError(f"{filename} deve ser um arquivo comum.")
 
 
-def generate(*, target: str, channel: str, output: Path, owner: str,
+def generate(*, target: str, channel: str, output: Path, owner: str | None = None,
              tag: str | None = None, bind: str | None = None, port: int | None = None,
              admin_email: str, force: bool = False) -> dict:
     templates = template_path(target, channel)
@@ -249,8 +293,11 @@ def generate(*, target: str, channel: str, output: Path, owner: str,
     except OSError as exc:
         raise DeployerError("Modelos Compose ou .env.example ausentes para o alvo.") from exc
     version = product_version()
+    actual_owner = owner or defaults(target, channel)["owner"]
+    pinned = image_tag(target, channel, actual_owner, tag)
     values = prepare_values(template, target=target, channel=channel,
-                            owner=owner, tag=tag, bind=bind, port=port, admin_email=admin_email)
+                            owner=actual_owner, tag=pinned, bind=bind, port=port,
+                            admin_email=admin_email)
     output = output.expanduser().resolve()
     ensure_directory(output)
     compose_path, env_path = output / "compose.yaml", output / ENV_NAME
@@ -273,8 +320,12 @@ def generate(*, target: str, channel: str, output: Path, owner: str,
         if old_env is None:
             env_path.unlink(missing_ok=True)
         raise
+    persisted = parse_env(env_data.decode("utf-8"))
     return {"directory": str(output), "target": target, "channel": channel,
-            "version": version, "tag": parse_env(env_data.decode("utf-8"))["APP_TAG"],
+            "version": version, "tag": persisted["APP_TAG"],
+            "owner": persisted["IMAGE_OWNER"], "web_port": int(persisted["WEB_PORT"]),
+            "compose_path": str(compose_path), "env_path": str(env_path),
+            "files_generated": [str(compose_path), str(env_path)],
             "env_preserved": old_env is not None, "backup_id": backup_id}
 
 
@@ -424,7 +475,8 @@ def rollback(directory: Path, *, tag: str | None, confirmed: bool) -> dict:
 def upgrade(directory: Path, *, tag: str | None, confirmed: bool) -> dict:
     if not confirmed:
         raise DeployerError("Atualização exige --yes e confirmação na interface gráfica.")
-    chosen = tag or product_version()
+    current = validate_directory(directory)
+    chosen = image_tag("docker", "production", current["owner"], tag)
     if not (SEMVER.fullmatch(chosen) or SHA_TAG.fullmatch(chosen)):
         raise DeployerError("Atualização exige SemVer estável ou sha-<12 hex>.")
     return switch_image_tag(directory.expanduser().resolve(), tag=chosen, reason="upgrade")
@@ -501,8 +553,9 @@ def status(directory: Path) -> dict:
     return result
 
 
-def preview(*, target: str, channel: str, owner: str, tag: str | None,
-            bind: str | None, port: int | None) -> dict:
+def preview(*, target: str, channel: str, owner: str | None = None,
+            tag: str | None = None, bind: str | None = None, port: int | None = None) -> dict:
+    owner = owner or defaults(target, channel)["owner"]
     if not OWNER.fullmatch(owner):
         raise DeployerError("IMAGE_OWNER inválido.")
     if bind is not None and bind not in ("127.0.0.1", "::1"):
@@ -515,7 +568,7 @@ def preview(*, target: str, channel: str, owner: str, tag: str | None,
         compose = (template / "compose.yaml").read_text(encoding="utf-8")
     except OSError as exc:
         raise DeployerError("Modelo de deploy ausente.") from exc
-    chosen = tag or ("develop" if channel == "develop" else product_version())
+    chosen = image_tag(target, channel, owner, tag)
     if channel == "production" and not (SEMVER.fullmatch(chosen) or SHA_TAG.fullmatch(chosen)):
         raise DeployerError("Produção exige SemVer estável ou sha-<12 hex>.")
     if channel == "develop" and chosen != "develop" and not (SEMVER.fullmatch(chosen) or SHA_TAG.fullmatch(chosen)):
@@ -558,11 +611,17 @@ def make_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("version", help="Ler somente o arquivo VERSION do projeto")
     commands.add_parser("list", help="Listar alvos e canais")
+    for name in ("defaults", "versions"):
+        item = commands.add_parser(name, help="Defaults do modelo ou catálogo de releases")
+        item.add_argument("--target", choices=TARGETS, default="docker")
+        item.add_argument("--channel", choices=CHANNELS, default="production")
+        if name == "versions":
+            item.add_argument("--owner", help="Namespace GHCR opcional")
     for name in ("generate", "preview"):
         item = commands.add_parser(name)
         item.add_argument("--target", choices=TARGETS, required=True)
         item.add_argument("--channel", choices=CHANNELS, required=True)
-        item.add_argument("--owner", required=True, help="Namespace GHCR das imagens da implantação")
+        item.add_argument("--owner", help="Namespace GHCR opcional (padrão do modelo)")
         item.add_argument("--tag")
         item.add_argument("--bind")
         item.add_argument("--port", type=int)
@@ -591,6 +650,10 @@ def main(argv: list[str] | None = None) -> int:
             output = {"product_version": product_version()}
         elif args.command == "list":
             output = {"targets": TARGETS, "channels": CHANNELS}
+        elif args.command == "defaults":
+            output = defaults(args.target, args.channel)
+        elif args.command == "versions":
+            output = catalog(args.target, args.channel, owner=args.owner)
         elif args.command == "generate":
             output = generate(target=args.target, channel=args.channel, output=args.output,
                               owner=args.owner, tag=args.tag, bind=args.bind, port=args.port,
