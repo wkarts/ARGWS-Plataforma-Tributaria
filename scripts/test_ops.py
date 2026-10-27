@@ -49,6 +49,20 @@ class OpsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "CBS_"):
             preflight.validate(values, "production")
 
+    def test_production_provider_mode_must_not_use_fixture(self):
+        values = {
+            "SECRET_KEY": "s" * 32, "BOOTSTRAP_ADMIN_EMAIL": "admin@example.org",
+            "BOOTSTRAP_ADMIN_PASSWORD": "p" * 20, "POSTGRES_PASSWORD": "p",
+            "REDIS_PASSWORD": "p", "RABBITMQ_DEFAULT_PASS": "p",
+            "S3_ACCESS_KEY": "a", "S3_SECRET_KEY": "s" * 20,
+            "S3_ENDPOINT": "objectstore:9000", "APP_TAG": "v0.3.3",
+            "PROVIDER_MODE": "fixture",
+        }
+        with self.assertRaisesRegex(ValueError, "dados simulados"):
+            preflight.validate(values, "production")
+        values["PROVIDER_MODE"] = "disabled"
+        preflight.validate(values, "production")
+
     def test_rollback_only_updates_version_and_preserves_backup(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / ".env"

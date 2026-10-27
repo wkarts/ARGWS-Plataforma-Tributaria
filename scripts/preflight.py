@@ -50,8 +50,11 @@ def validate(values: dict[str, str], channel: str) -> None:
         raise ValueError("S3_USE_SSL deve ser true ou false")
     if not values.get("S3_ENDPOINT", "").strip():
         raise ValueError("S3_ENDPOINT é obrigatório")
-    if values.get("PROVIDER_MODE", "fixture") not in {"fixture", "receita"}:
+    mode = values.get("PROVIDER_MODE", "disabled")
+    if mode not in {"fixture", "receita", "disabled"}:
         raise ValueError("PROVIDER_MODE inválido")
+    if channel == "production" and mode == "fixture":
+        raise ValueError("Produção não permite dados simulados (PROVIDER_MODE=fixture)")
     if values.get("PROVIDER_MODE") == "receita":
         required = ("CBS_ALLOWED_BASES", "CBS_CREDENTIAL_ORGANIZATION_ID", "CBS_TOKEN_URL", "CBS_CLIENT_ID", "CBS_CLIENT_SECRET", "CBS_WEBHOOK_BASE_URL")
         missing = [key for key in required if not values.get(key)]

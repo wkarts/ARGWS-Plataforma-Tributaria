@@ -53,3 +53,20 @@ python -m PyInstaller --clean --noconfirm --onefile --windowed `
 ```
 
 Inclua os dois executáveis e este README no mesmo ZIP; publique apenas o pacote gráfico. Smoke interno: `version`, `list`, `defaults`, `generate --target docker --channel production --output <pasta> --admin-email admin@example.org`, `validate --directory <pasta>`. O smoke da GUI no Windows (`fiscal-deployer-gui-win-x64.exe --smoke-test`) usa o executável interno de verdade para **gerar e validar ambos os arquivos** em uma pasta temporária com espaços, sem internet. A compilação deve incluir o módulo Python `release_catalog.py` no worker, e o ZIP final sempre contém os dois executáveis.
+
+## Escolher a integração CBS
+
+Na GUI Windows, o campo **Integração CBS / PROVIDER_MODE** apresenta três opções:
+
+- **disabled** — padrão seguro para produção. Desliga apenas consultas CBS oficiais; login, usuários, empresas e dados locais permanecem disponíveis.
+- **receita** — permite consultas oficiais SOMENTE após credenciais e ambientes autorizados. São necessários `CBS_TOKEN_URL`, `CBS_CLIENT_ID`, `CBS_CLIENT_SECRET`, `CBS_WEBHOOK_BASE_URL` público em HTTPS, `CBS_CREDENTIAL_ORGANIZATION_ID`, `CBS_ALLOWED_BASES`, além de `CBS_PRODUCTION_ENABLED` ou `CBS_RESTRICTED_ENABLED`. Sem isso a plataforma inicia, informa a pendência e não envia consultas oficiais.
+- **fixture** — dados de testes, **disponível exclusivamente em develop**. Não permite instalação de produção nem constitui apuração fiscal.
+
+Uma instalação nova grava o modo escolhido no `.env` pela opção **Gerar arquivos**. Para alterar somente o modo de uma instalação existente, use **Aplicar modo CBS**, que preserva todas as senhas e cria um backup completo do `.env`; ou execute:
+
+```bash
+python tools/deployer/deployer.py provider-update --directory ./installation --mode disabled --yes
+python tools/deployer/deployer.py provider-update --directory ./installation --mode receita --yes
+```
+
+Após alterar o `.env`, recrie os serviços da stack para atualizar suas variáveis de ambiente. **Não execute `down --volumes`**. Os parâmetros oficiais vazios não são preenchidos com valores inventados nem com respostas simuladas. O estado de integração incompleta é apresentado no painel da API.

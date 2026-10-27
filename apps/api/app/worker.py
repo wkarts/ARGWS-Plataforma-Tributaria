@@ -41,6 +41,8 @@ def authorization_rejection(organization_id: str, base: str, resource: str,
         return "Integração CBS desabilitada"
     if organization_id != settings.cbs_credential_organization_id or base not in settings.allowed_bases:
         return "Credencial CBS revogada para organização ou raiz CNPJ"
+    if not settings.receipt_readiness()["ready"]:
+        return "Integração Receita ainda sem credenciais e ambientes completos"
     if (environment == "restricted" and not settings.cbs_restricted_enabled
             or environment == "production" and not settings.cbs_production_enabled
             or environment not in {"restricted", "production"}):
@@ -213,6 +215,13 @@ async def process_one(query_id: str) -> None:
 
 
 async def run_tick() -> int:
+    # Do not consume queued official jobs until credentials are reconfigured.
+    if settings.provider_mode == "receita":
+        pending = settings.receipt_readiness()
+        transport_keys = {"CBS_TOKEN_URL", "CBS_CLIENT_ID", "CBS_CLIENT_SECRET",
+                          "CBS_WEBHOOK_BASE_URL", "CBS_CLIENT_SECRET_FILE"}
+        if not pending["ready"] and transport_keys.intersection(pending["missing"]):
+            return 0
     ids = await due_ids()
     for query_id in ids:
         await process_one(query_id)

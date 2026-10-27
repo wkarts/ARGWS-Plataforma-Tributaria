@@ -25,6 +25,7 @@ from release_catalog import ReleaseCatalogError, load_catalog
 
 TARGETS = ("docker", "dockge", "portainer", "cloudpanel")
 CHANNELS = ("develop", "production")
+PROVIDER_MODES = ("disabled", "receita", "fixture")
 SEMVER = re.compile(r"v?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$")
 PRODUCT_SEMVER = re.compile(r"v?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?$")
 SHA_TAG = re.compile(r"sha-[0-9a-f]{12}$")
@@ -95,6 +96,9 @@ def defaults(target: str, channel: str) -> dict:
         "web_bind": env.get("WEB_BIND_ADDRESS", "127.0.0.1"),
         "embedded_version": product_version(),
         "default_tag": "latest" if channel == "production" else "develop",
+        "provider_mode": env.get("PROVIDER_MODE", "disabled"),
+        "provider_choices": ["disabled", "receita"] if channel == "production"
+                            else list(PROVIDER_MODES),
     }
 
 
@@ -116,6 +120,15 @@ def image_tag(target: str, channel: str, owner: str, tag: str | None) -> str:
             raise DeployerError("Nenhuma release estável completa foi encontrada no GitHub.")
         return pinned
     return tag or ("develop" if channel == "develop" else product_version())
+
+
+def selected_provider(mode: str | None, channel: str, template: str) -> str:
+    value = mode or parse_env(template).get("PROVIDER_MODE", "disabled")
+    if value not in PROVIDER_MODES:
+        raise DeployerError("PROVIDER_MODE inválido; escolha disabled, receita ou fixture.")
+    if channel == "production" and value == "fixture":
+        raise DeployerError("Produção não aceita fixture (dados simulados).")
+    return value
 
 
 def parse_env(content: str) -> dict[str, str]:
@@ -187,7 +200,7 @@ def secret_values(template: str) -> dict[str, str]:
 
 def prepare_values(template: str, *, target: str, channel: str, owner: str,
                    tag: str | None, bind: str | None, port: int | None,
-                   admin_email: str) -> dict[str, str]:
+                   admin_email: str, provider_mode: str | None = None) -> dict[str, str]:
     if not OWNER.fullmatch(owner):
         raise DeployerError("IMAGE_OWNER deve ser um identificador GHCR minúsculo válido.")
     chosen = tag or ("develop" if channel == "develop" else product_version())
@@ -203,7 +216,9 @@ def prepare_values(template: str, *, target: str, channel: str, owner: str,
         raise DeployerError("Informe um e-mail válido do administrador inicial.")
     source = parse_env(template)
     values = secret_values(template)
-    values.update({"IMAGE_OWNER": owner, "APP_TAG": chosen, "BOOTSTRAP_ADMIN_EMAIL": admin_email.lower()})
+    values.update({"IMAGE_OWNER": owner, "APP_TAG": chosen,
+                   "BOOTSTRAP_ADMIN_EMAIL": admin_email.lower(),
+                   "PROVIDER_MODE": selected_provider(provider_mode, channel, template)})
     if bind is not None:
         values["WEB_BIND_ADDRESS"] = bind
     if port is not None:
@@ -283,7 +298,8 @@ def ensure_directory(directory: Path) -> None:
 
 def generate(*, target: str, channel: str, output: Path, owner: str | None = None,
              tag: str | None = None, bind: str | None = None, port: int | None = None,
-             admin_email: str, force: bool = False) -> dict:
+             admin_email: str, force: bool = False,
+             provider_mode: str | None = None) -> dict:
     templates = template_path(target, channel)
     compose_template = templates / "compose.yaml"
     env_template = templates / ".env.example"
@@ -297,7 +313,7 @@ def generate(*, target: str, channel: str, output: Path, owner: str | None = Non
     pinned = image_tag(target, channel, actual_owner, tag)
     values = prepare_values(template, target=target, channel=channel,
                             owner=actual_owner, tag=pinned, bind=bind, port=port,
-                            admin_email=admin_email)
+                            admin_email=admin_email, provider_mode=provider_mode)
     output = output.expanduser().resolve()
     ensure_directory(output)
     compose_path, env_path = output / "compose.yaml", output / ENV_NAME
@@ -323,6 +339,7 @@ def generate(*, target: str, channel: str, output: Path, owner: str | None = Non
     persisted = parse_env(env_data.decode("utf-8"))
     return {"directory": str(output), "target": target, "channel": channel,
             "version": version, "tag": persisted["APP_TAG"],
+            "provider_mode": persisted.get("PROVIDER_MODE", "disabled"),
             "owner": persisted["IMAGE_OWNER"], "web_port": int(persisted["WEB_PORT"]),
             "compose_path": str(compose_path), "env_path": str(env_path),
             "files_generated": [str(compose_path), str(env_path)],
@@ -361,6 +378,7 @@ def validate_content(compose: str, env_text: str, *, expected_channel: str | Non
         raise DeployerError("APP_ENV precisa ser development ou production.")
     if normalized_environment and normalized_environment != expected_channel:
         raise DeployerError("APP_ENV não corresponde ao canal do modelo.")
+    provider_mode = selected_provider(env.get("PROVIDER_MODE"), expected_channel, env_text)
     if expected_channel == "production" and not (SEMVER.fullmatch(tag) or SHA_TAG.fullmatch(tag)):
         raise DeployerError("Produção exige SemVer estável ou sha-<12 hex> fixo.")
     if not (SEMVER.fullmatch(tag) or SHA_TAG.fullmatch(tag) or tag == "develop"):
@@ -395,7 +413,8 @@ def validate_content(compose: str, env_text: str, *, expected_channel: str | Non
         if name in env and env[name] and marker not in env[name] and quote(marker, safe="") not in env[name]:
             raise DeployerError(f"{name} não corresponde ao segredo configurado.")
     return {"project": env["COMPOSE_PROJECT_NAME"], "owner": env["IMAGE_OWNER"],
-            "tag": tag, "bind": env["WEB_BIND_ADDRESS"], "port": port}
+            "tag": tag, "bind": env["WEB_BIND_ADDRESS"], "port": port,
+            "provider_mode": provider_mode}
 
 
 def validate_directory(directory: Path) -> dict:
@@ -530,6 +549,43 @@ def recover(directory: Path, *, backup_id: str | None, confirmed: bool) -> dict:
     return {"restored": chosen.name, "directory": str(directory), "files": sorted(files)}
 
 
+def update_provider_mode(directory: Path, *, mode: str, confirmed: bool) -> dict:
+    """Modify only PROVIDER_MODE in an existing stack, preserving every secret."""
+    if not confirmed:
+        raise DeployerError("Confirme a alteração de provedor (--yes).")
+    directory = directory.expanduser().resolve()
+    compose_path, env_path = directory / "compose.yaml", directory / ENV_NAME
+    if (not compose_path.is_file() or not env_path.is_file()
+            or compose_path.is_symlink() or env_path.is_symlink()):
+        raise DeployerError("A pasta deve conter compose.yaml e .env regulares.")
+    original = env_path.read_text(encoding="utf-8")
+    values = parse_env(original)
+    channel = "develop" if values.get("APP_ENV") == "development" else values.get("APP_ENV", "production")
+    selected_provider(mode, channel, original)
+    if values.get("PROVIDER_MODE", "disabled") == mode:
+        return {"changed": False, "provider_mode": mode, "backup_id": None}
+    if "PROVIDER_MODE" in values:
+        updated = replace_env_values(original, {"PROVIDER_MODE": mode})
+    else:
+        updated = original.rstrip("\n") + "\nPROVIDER_MODE=" + mode + "\n"
+    validate_content(compose_path.read_text(encoding="utf-8"), updated,
+                     expected_channel=channel)
+    backup = backup_files(directory, "provider-mode")
+    atomic_write(env_path, updated.encode("utf-8"))
+    missing = ([key for key in ("CBS_TOKEN_URL", "CBS_CLIENT_ID", "CBS_CLIENT_SECRET",
+                               "CBS_WEBHOOK_BASE_URL", "CBS_ALLOWED_BASES",
+                               "CBS_CREDENTIAL_ORGANIZATION_ID")
+                if not parse_env(updated).get(key)] if mode == "receita" else [])
+    return {
+        "changed": True, "provider_mode": mode, "backup_id": backup,
+        "missing_configuration": missing,
+        "note": ("Modo Receita selecionado; credenciais e ambientes devem ser validados "
+                 "pela API antes de liberar consultas oficiais."
+                 if mode == "receita" else
+                 "Integração oficial desabilitada; recursos locais permanecem acessíveis."),
+    }
+
+
 def status(directory: Path) -> dict:
     directory = directory.expanduser().resolve()
     config = validate_directory(directory)
@@ -554,7 +610,8 @@ def status(directory: Path) -> dict:
 
 
 def preview(*, target: str, channel: str, owner: str | None = None,
-            tag: str | None = None, bind: str | None = None, port: int | None = None) -> dict:
+            tag: str | None = None, bind: str | None = None, port: int | None = None,
+            provider_mode: str | None = None) -> dict:
     owner = owner or defaults(target, channel)["owner"]
     if not OWNER.fullmatch(owner):
         raise DeployerError("IMAGE_OWNER inválido.")
@@ -574,9 +631,10 @@ def preview(*, target: str, channel: str, owner: str | None = None,
     if channel == "develop" and chosen != "develop" and not (SEMVER.fullmatch(chosen) or SHA_TAG.fullmatch(chosen)):
         raise DeployerError("Tag develop, SemVer estável ou sha-<12 hex> inválida.")
     public = parse_env(env)
+    mode = selected_provider(provider_mode, channel, env)
     service_block = compose.split("\nservices:\n", 1)[-1].split("\nnetworks:\n", 1)[0]
     return {"target": target, "channel": channel, "product_version": product_version(),
-            "image_owner": owner, "image_tag": chosen,
+            "image_owner": owner, "image_tag": chosen, "provider_mode": mode,
             "web_bind": bind or public.get("WEB_BIND_ADDRESS", "127.0.0.1"),
             "web_port": port or public.get("WEB_PORT"),
             "services": sorted(set(re.findall(r"^  ([a-z0-9-]+):\s*$", service_block, re.MULTILINE))),
@@ -625,15 +683,19 @@ def make_parser() -> argparse.ArgumentParser:
         item.add_argument("--tag")
         item.add_argument("--bind")
         item.add_argument("--port", type=int)
+        item.add_argument("--provider-mode", choices=PROVIDER_MODES)
         if name == "generate":
             item.add_argument("--output", required=True, type=Path)
             item.add_argument("--admin-email", required=True, help="E-mail do administrador inicial")
             item.add_argument("--force", action="store_true", help="Atualizar o Compose e preservar integralmente o .env")
-    for name in ("validate", "status", "deploy", "upgrade", "rollback", "recover", "export"):
+    for name in ("validate", "status", "deploy", "upgrade", "rollback", "recover",
+                 "export", "provider-update"):
         item = commands.add_parser(name)
         item.add_argument("--directory", required=True, type=Path)
-        if name in ("deploy", "upgrade", "rollback", "recover"):
+        if name in ("deploy", "upgrade", "rollback", "recover", "provider-update"):
             item.add_argument("--yes", action="store_true", help="Confirmar operação local")
+        if name == "provider-update":
+            item.add_argument("--mode", choices=PROVIDER_MODES, required=True)
         if name in ("upgrade", "rollback"):
             item.add_argument("--tag", help="Tag SemVer estável ou sha-<12 hex> já publicada")
         if name == "recover":
@@ -657,14 +719,16 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "generate":
             output = generate(target=args.target, channel=args.channel, output=args.output,
                               owner=args.owner, tag=args.tag, bind=args.bind, port=args.port,
-                              admin_email=args.admin_email, force=args.force)
+                              admin_email=args.admin_email, force=args.force, provider_mode=args.provider_mode)
         elif args.command == "preview":
             output = preview(target=args.target, channel=args.channel, owner=args.owner,
-                             tag=args.tag, bind=args.bind, port=args.port)
+                             tag=args.tag, bind=args.bind, port=args.port, provider_mode=args.provider_mode)
         elif args.command == "validate":
             output = validate_directory(args.directory)
         elif args.command == "status":
             output = status(args.directory)
+        elif args.command == "provider-update":
+            output = update_provider_mode(args.directory, mode=args.mode, confirmed=args.yes)
         elif args.command == "deploy":
             output = deploy(args.directory, confirmed=args.yes)
         elif args.command == "rollback":
