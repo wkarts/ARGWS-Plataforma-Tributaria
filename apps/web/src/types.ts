@@ -227,3 +227,88 @@ export interface CommercialInstallment {
   category: "commercial_payment";
   basis: string;
 }
+
+/** The central is an evidence dashboard; it never asserts official assessment coverage. */
+export interface CentralQuery {
+  id: string;
+  resource: Resource;
+  environment: Environment;
+  status: string;
+  ticket: string | null;
+  received_sha256: string | null;
+  has_raw_evidence: boolean;
+  has_error: boolean;
+  poll_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+  official_receipt: boolean;
+}
+
+export interface CentralSummary {
+  company_id: string;
+  cnpj_base: string;
+  counts: {
+    queries: number;
+    active: number;
+    attention: number;
+    completed: number;
+    by_status: Record<string, number>;
+    documents: number;
+    records: number;
+    official_snapshots: number;
+  };
+  recent_queries: CentralQuery[];
+  official_coverage_proven: false;
+  basis: string;
+}
+
+export interface CentralHistory {
+  company_id: string;
+  items: CentralQuery[];
+  next_cursor: string | null;
+}
+
+export type SimulationMode = "regular" | "simples";
+
+export interface ReformSimulationInput {
+  company_id: string;
+  period: string;
+  mode: SimulationMode;
+  revenue: string;
+  purchases: string;
+  cbs_sales_rate: string;
+  ibs_sales_rate: string;
+  cbs_purchase_rate: string;
+  ibs_purchase_rate: string;
+  das_effective_rate?: string;
+  das_cbs_component_rate?: string;
+  das_ibs_component_rate?: string;
+}
+
+export interface ReformSimulation {
+  company_id: string;
+  period: string;
+  mode: SimulationMode;
+  source: "operator_defined_hypothesis";
+  official_assessment: false;
+  official_coverage_proven: false;
+  regular: {
+    cbs_debit: string;
+    ibs_debit: string;
+    cbs_potential_purchase_tax: string;
+    ibs_potential_purchase_tax: string;
+    theoretical_net: string;
+    credit_to_appropriate: null;
+    credit_appropriated: null;
+    credit_used: null;
+  };
+  simples: {
+    das_total_estimate: string;
+    das_cbs_component_estimate: string;
+    das_ibs_component_estimate: string;
+    das_other_component_estimate: string;
+    regular_option_combined_hypothesis: string;
+    difference_regular_minus_simples: string;
+  } | null;
+  warnings: string[];
+}
