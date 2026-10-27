@@ -587,6 +587,33 @@ def update_provider_mode(directory: Path, *, mode: str, confirmed: bool) -> dict
     }
 
 
+def configure(directory: Path, updates: dict, *, confirmed: bool) -> dict:
+    """Patch only allowlisted Receita/SMTP fields, always preserving a private backup."""
+    if not confirmed:
+        raise DeployerError("Confirme a gravação das configurações (--yes).")
+    directory = directory.expanduser().resolve()
+    envfile, compose = directory / ENV_NAME, directory / "compose.yaml"
+    if (directory.is_symlink() or not envfile.is_file() or envfile.is_symlink()
+            or not compose.is_file() or compose.is_symlink()):
+        raise DeployerError("Instalação sem .env e compose.yaml regulares.")
+    original = envfile.read_text(encoding="utf-8")
+    current = parse_env(original)
+    channel = "develop" if current.get("APP_ENV") == "development" else current.get("APP_ENV", "production")
+    changes = normalize_updates(updates, channel, current)
+    combined = {**current, **changes}
+    integration_state = validate_integrations(combined, channel)
+    if not changes:
+        return {"changed": False, "integrations": integration_state}
+    data = append_or_replace_env(original, changes)
+    validate_content(compose.read_text(encoding="utf-8"), data, expected_channel=channel)
+    if data == original:
+        return {"changed": False, "integrations": integration_state}
+    backup = backup_files(directory, "integrations")
+    atomic_write(envfile, data.encode("utf-8"))
+    return {"changed": True, "backup_id": backup, "integrations": integration_state,
+            "notice": "Recrie os serviços no Docker/Dockge para aplicar as alterações"}
+
+
 def status(directory: Path) -> dict:
     directory = directory.expanduser().resolve()
     config = validate_directory(directory)
@@ -686,17 +713,21 @@ def make_parser() -> argparse.ArgumentParser:
         item.add_argument("--port", type=int)
         item.add_argument("--provider-mode", choices=PROVIDER_MODES)
         if name == "generate":
+            item.add_argument("--stdin-json", action="store_true")
             item.add_argument("--output", required=True, type=Path)
             item.add_argument("--admin-email", required=True, help="E-mail do administrador inicial")
             item.add_argument("--force", action="store_true", help="Atualizar o Compose e preservar integralmente o .env")
     for name in ("validate", "status", "deploy", "upgrade", "rollback", "recover",
-                 "export", "provider-update"):
+                 "export", "provider-update", "configure"):
         item = commands.add_parser(name)
         item.add_argument("--directory", required=True, type=Path)
         if name in ("deploy", "upgrade", "rollback", "recover", "provider-update"):
             item.add_argument("--yes", action="store_true", help="Confirmar operação local")
         if name == "provider-update":
             item.add_argument("--mode", choices=PROVIDER_MODES, required=True)
+        if name == "configure":
+            item.add_argument("--yes", action="store_true")
+            item.add_argument("--stdin-json", action="store_true", required=True)
         if name in ("upgrade", "rollback"):
             item.add_argument("--tag", help="Tag SemVer estável ou sha-<12 hex> já publicada")
         if name == "recover":
@@ -720,7 +751,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "generate":
             output = generate(target=args.target, channel=args.channel, output=args.output,
                               owner=args.owner, tag=args.tag, bind=args.bind, port=args.port,
-                              admin_email=args.admin_email, force=args.force, provider_mode=args.provider_mode)
+                              admin_email=args.admin_email, force=args.force, provider_mode=args.provider_mode,
+                               configuration=read_config_stdin() if args.stdin_json else None)
         elif args.command == "preview":
             output = preview(target=args.target, channel=args.channel, owner=args.owner,
                              tag=args.tag, bind=args.bind, port=args.port, provider_mode=args.provider_mode)
@@ -730,6 +762,8 @@ def main(argv: list[str] | None = None) -> int:
             output = status(args.directory)
         elif args.command == "provider-update":
             output = update_provider_mode(args.directory, mode=args.mode, confirmed=args.yes)
+        elif args.command == "configure":
+            output = configure(args.directory, read_config_stdin(), confirmed=args.yes)
         elif args.command == "deploy":
             output = deploy(args.directory, confirmed=args.yes)
         elif args.command == "rollback":
