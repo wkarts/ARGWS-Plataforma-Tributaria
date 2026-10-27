@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -14,10 +15,35 @@ from generate_deploys import CHANNELS, DEPLOY, ROOT, TARGETS, run as check_gener
 from version import read_version
 
 
+def redis_startup_contract(compose: str) -> list[str]:
+    """Require one shell script argument so Compose cannot truncate Redis startup."""
+    match = re.search(
+        r"(?ms)^  redis:\n(.*?)(?=^  [a-z][a-z0-9_-]*:\n|\Z)",
+        compose,
+    )
+    if match is None:
+        return ["Serviço Redis ausente no Compose"]
+    redis = match.group(1)
+    errors: list[str] = []
+    if '    entrypoint: ["/bin/sh", "-ec"]' not in redis:
+        errors.append("Redis sem entrypoint /bin/sh -ec")
+    if "    command:\n      - |\n" not in redis:
+        errors.append("Redis command precisa ser lista com exatamente um script")
+    required = (
+        "        umask 077\n",
+        "        printf 'requirepass %s\\n' \"$$REDIS_PASSWORD\" > /tmp/redis.conf\n",
+        "        exec redis-server /tmp/redis.conf --appendonly yes\n",
+    )
+    if any(text not in redis for text in required):
+        errors.append("Script Redis está incompleto ou perdeu escape do REDIS_PASSWORD")
+    return errors
+
+
 def static_checks() -> list[str]:
     errors: list[str] = []
     version = read_version()
     compose = (DEPLOY / "compose.yaml").read_text(encoding="utf-8")
+    errors.extend(redis_startup_contract(compose))
     for service in ("migrate", "bootstrap", "api", "worker", "scheduler", "web", "postgres", "redis", "rabbitmq", "objectstore"):
         if f"  {service}:\n" not in compose:
             errors.append(f"Serviço ausente: {service}")
@@ -77,11 +103,29 @@ def docker_checks() -> list[str]:
                 env = Path(tmp) / "test.env"
                 env.write_text(content, encoding="utf-8")
                 result = subprocess.run(
-                    ["docker", "compose", "--project-directory", str(directory), "--env-file", str(env), "-f", str(directory / "compose.yaml"), "config", "--quiet"],
+                    ["docker", "compose", "--project-directory", str(directory), "--env-file", str(env), "-f", str(directory / "compose.yaml"), "config", "--format", "json"],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False,
                 )
                 if result.returncode:
                     errors.append(f"{directory.relative_to(ROOT)}: {result.stderr.strip()[:300]}")
+                else:
+                    try:
+                        resolved = json.loads(result.stdout)
+                        redis_service = resolved["services"]["redis"]
+                        command = redis_service["command"]
+                        if (redis_service.get("entrypoint") != ["/bin/sh", "-ec"]
+                                or not isinstance(command, list)
+                                or len(command) != 1
+                                or "umask 077" not in command[0]
+                                or "exec redis-server" not in command[0]
+                                or "$REDIS_PASSWORD" not in command[0]):
+                            errors.append(
+                                f"{directory.relative_to(ROOT)}: Redis command foi fragmentado no Docker Compose"
+                            )
+                    except (ValueError, TypeError, KeyError, IndexError) as exc:
+                        errors.append(
+                            f"{directory.relative_to(ROOT)}: não foi possível verificar o comando Redis ({type(exc).__name__})"
+                        )
     return errors
 
 
