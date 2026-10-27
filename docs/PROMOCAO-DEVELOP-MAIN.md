@@ -28,3 +28,17 @@ A publicação automatiza artefatos e imagens do repositório, não a implantaç
 Os dois processos completos de build são necessários porque a pré-release valida o commit da `develop`, enquanto a release estável valida o commit final da `main` contendo o novo SemVer. O CI da PR de promoção também valida a integração entre os históricos antes do merge.
 
 Há recuperação manual via `workflow_dispatch`, mas ela exige comprovação de uma execução anterior bem-sucedida do publicador de `develop` para o mesmo SHA.
+
+## Recuperação de falha de permissão
+
+Se o log contiver `GitHub Actions is not permitted to create or approve pull requests`, a aplicação não pode ignorar essa restrição. Habilite uma única vez a opção **Allow GitHub Actions to create and approve pull requests** em `Settings → Actions → General → Workflow permissions`, ou configure o segredo `PROMOTION_PR_TOKEN` de GitHub App/PAT autorizado.
+
+O token padrão pode mostrar `PullRequests: write` no log e, mesmo assim, ser bloqueado pela política de criação de PRs. Por isso a automação faz diagnóstico da política quando ela é legível, antes de preparar a branch de release; quando não for possível lê-la, a falha da criação informa a configuração necessária. A aplicação **não tenta criar PR via outro endpoint** para contornar essa restrição.
+
+**Não reexecute o workflow histórico** `Create develop-to-main promotion PR` do commit `bca69a8a1095`: ele contém o modelo antigo de promoção por push e continuará carregando o YAML do commit original. Depois de ajustar a autorização, use **Actions → Promote verified develop to main → Run workflow** na branch `main`; essa recuperação exige evidências de uma pré-release já concluída para o HEAD da `develop`. Os próximos merges passam a usar somente o promotor de release validada (workflow_run).
+
+## Histórico reconciliado e resolução restrita de conflitos
+
+O job `40494430514` comprovou conflito entre `main` e `develop` nos arquivos `.github/workflows/develop-to-main-pr.yml`, `docs/PROMOCAO-DEVELOP-MAIN.md` e `scripts/test_promotion_workflow.py`. A correção integra o histórico de ambas as branches por commit com dois pais, sem reset e sem force-push; preserva o código e configurações mais recentes, e mantém a versão de desenvolvimento separada da versão estável.
+
+Antes de mesclar novas PRs em develop, o CI verifica `git merge-tree --write-tree origin/main HEAD`, impedindo reincidência por alterações divergentes. Durante a promoção, `scripts/resolve_release_merge.py` soluciona automaticamente somente conflitos em `VERSION`, `apps/api/pyproject.toml`, `apps/web/package.json` e `apps/web/package-lock.json`, que depois serão sincronizados em um SemVer estável inédito. Conflitos em lógica tributária, documentação, migrations ou outros workflows são listados e bloqueados sem substituir implementações existentes.

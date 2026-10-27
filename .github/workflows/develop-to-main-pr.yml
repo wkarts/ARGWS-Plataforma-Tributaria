@@ -129,6 +129,29 @@ jobs:
           echo "preview=$preview" >> "$GITHUB_OUTPUT"
           echo "Pré-release $preview validada para promoção." >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Check repository PR creation policy before preparing release branch
+        if: steps.evidence.outputs.promote == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PROMOTION_PR_TOKEN || github.token }}
+          HAS_PROMOTION_TOKEN: ${{ secrets.PROMOTION_PR_TOKEN != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$HAS_PROMOTION_TOKEN" == true ]]; then
+            echo "Credencial de promoção independente configurada."
+            exit 0
+          fi
+          echo "::notice title=Permissão de PR::Usando GITHUB_TOKEN. O repositório precisa permitir que GitHub Actions crie pull requests, mesmo com pull-requests: write no YAML."
+          if policy="$(gh api "repos/$REPO/actions/permissions/workflow" 2>/dev/null)"; then
+            allowed="$(jq -r '.can_approve_pull_request_reviews // empty' <<< "$policy")"
+            if [[ "$allowed" == false ]]; then
+              echo "::error title=Configuração necessária::Habilite Settings > Actions > General > Allow GitHub Actions to create and approve pull requests ou configure PROMOTION_PR_TOKEN. Rerun sem essa alteração continuará falhando."
+              exit 1
+            fi
+          else
+            echo "::notice::A leitura das configurações administrativas exige permissão adicional; a criação real da PR será validada na etapa de promoção."
+          fi
+
       - name: Prepare a unique stable version without rewriting develop
         id: prepare
         if: steps.evidence.outputs.promote == 'true'
@@ -170,10 +193,9 @@ jobs:
             git checkout -B "$branch" origin/main
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            if ! git merge --no-ff --no-edit origin/develop; then
-              git merge --abort || true
-              echo "::error::Conflito no merge develop/main; promoção interrompida"; exit 1;
-            fi
+            # Only version metadata is conflict-resolvable, with a synchronized
+            # SemVer immediately after this merge. Unknown conflicts fail closed.
+            python3 scripts/resolve_release_merge.py --source origin/develop
             python3 scripts/version.py set "$target_version"
             python3 scripts/version.py check
             python3 scripts/validate_release.py
@@ -220,7 +242,7 @@ jobs:
               number="$(gh pr list --repo "$REPO" --base main --head "$PROMOTION_BRANCH" \
                 --state open --json number --jq '.[0].number // empty')"
               [[ -n "$number" ]] || {
-                echo "::error::Criação de PR bloqueada. Habilite criação de PR por Actions ou configure PROMOTION_PR_TOKEN."; exit 1;
+                echo "::error title=GitHub bloqueou criação de PR::Em Settings > Actions > General habilite Allow GitHub Actions to create and approve pull requests, ou configure PROMOTION_PR_TOKEN. Depois use Actions > Promote verified develop to main > Run workflow na branch main para recuperar, sem executar o workflow legado."; exit 1;
               }
             fi
           fi
