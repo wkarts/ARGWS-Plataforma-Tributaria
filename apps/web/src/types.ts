@@ -90,7 +90,8 @@ export interface Capability {
 }
 
 export interface Capabilities {
-  provider_mode: "fixture" | "receita";
+  provider_mode: "fixture" | "receita" | "disabled";
+  official_configuration?: { ready: boolean; reason: string | null; missing: string[] };
   environments: Environment[];
   resources: Partial<Record<Resource, Capability>>;
   ibs?: { enabled: boolean; reason?: string | null };

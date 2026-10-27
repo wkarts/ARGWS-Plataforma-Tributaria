@@ -126,6 +126,8 @@ def test_worker_fixture_opens_polls_stores_and_projects(clients, monkeypatch):
 
     client, a, _, company, _, _, session_factory = clients
     monkeypatch.setattr(worker, "Session", session_factory)
+    # Preserve the fixture-only worker mode used by this isolated integration test.
+    monkeypatch.setattr(worker, "settings", get_settings())
 
     async def fake_bucket(self):
         return None
@@ -161,3 +163,72 @@ def test_worker_fixture_opens_polls_stores_and_projects(clients, monkeypatch):
     coverage = client.get(f"/api/v1/coverage?company_id={company.id}", headers=auth(a)).json()
     assert coverage["incremental_max_days"] == 8
     assert coverage["resources"]["creditos"]["last_completed_query_id"] == opened.json()["id"]
+
+def test_incomplete_receita_keeps_companies_and_login_available_without_mock(clients, monkeypatch):
+    """An invalid official integration must not disable local use or generate fixture data."""
+    from app.main import capabilities
+    from app import bootstrap as bootstrap_module
+    from app.storage import BlobStore
+
+    client, admin, _, company, _, _, factory = clients
+    monkeypatch.setenv("PROVIDER_MODE", "receita")
+    monkeypatch.setenv("CBS_PRODUCTION_ENABLED", "true")
+    monkeypatch.setenv("CBS_CLIENT_ID", "")
+    monkeypatch.setenv("CBS_CLIENT_SECRET", "")
+    monkeypatch.setenv("CBS_TOKEN_URL", "")
+    monkeypatch.setenv("CBS_WEBHOOK_BASE_URL", "")
+    monkeypatch.setenv("CBS_ALLOWED_BASES", "")
+    monkeypatch.setenv("CBS_CREDENTIAL_ORGANIZATION_ID", "")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "new-admin@example.test")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", "VeryStrong-password-2026")
+    get_settings.cache_clear()
+    settings = get_settings()
+    settings.validate_security(require_provider=False)
+    with pytest.raises(RuntimeError, match="Credenciais, callback"):
+        settings.validate_security()
+    pending = settings.receipt_readiness()
+    assert pending["ready"] is False
+    assert "CBS_CLIENT_SECRET" in pending["missing"]
+    assert "VeryStrong-password-2026" not in str(pending)
+
+    async def fake_bucket(self):
+        return None
+
+    monkeypatch.setattr(bootstrap_module, "Session", factory)
+    monkeypatch.setattr(BlobStore, "ensure_bucket", fake_bucket)
+
+    async def fake_throttle(username, session):
+        return None
+
+    from app import main as main_module
+    monkeypatch.setattr(main_module, "throttle_login", fake_throttle)
+    asyncio.run(bootstrap_module.bootstrap())
+    signed_in = client.post("/api/v1/auth/login", json={
+        "username": "new-admin@example.test", "password": "VeryStrong-password-2026",
+    })
+    assert signed_in.status_code == 200
+
+    caps = client.get("/api/v1/capabilities", headers=auth(admin))
+    assert caps.status_code == 200
+    data = caps.json()
+    assert data["provider_mode"] == "receita"
+    assert data["official_configuration"]["ready"] is False
+    assert data["environments"] == []
+    assert all(not item["enabled"] for item in data["resources"].values())
+    assert client.get("/api/v1/companies", headers=auth(admin)).status_code == 200
+    created = client.post("/api/v1/queries", json={
+        "company_id": company.id, "environment": "production", "resource": "creditos",
+    }, headers=auth(admin) | {"Idempotency-Key": "official-without-credentials"})
+    assert created.status_code == 409
+    assert client.get("/api/v1/queries", headers=auth(admin)).status_code == 200
+    assert capabilities()["environments"] == []
+
+
+def test_production_blocks_explicit_fixture_and_never_falls_back_to_it():
+    from app.config import Settings
+    safe = Settings(_env_file=None, app_env="production", provider_mode="disabled",
+                    secret_key="secure-production-secret-12345678901234567890")
+    safe.validate_security()
+    with pytest.raises(RuntimeError, match="não permite PROVIDER_MODE=fixture"):
+        Settings(_env_file=None, app_env="production", provider_mode="fixture",
+                 secret_key="secure-production-secret-12345678901234567890").validate_security()

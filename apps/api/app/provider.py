@@ -287,5 +287,7 @@ def provider_for(environment: str, settings: Settings):
     if environment == "fixture" and settings.provider_mode == "fixture":
         return FixtureProvider()
     if environment in {"restricted", "production"} and settings.provider_mode == "receita":
+        if not settings.receipt_readiness()["ready"]:
+            raise ProviderError("Integração Receita pendente de configuração e autorização")
         return ReceitaProvider(settings)
     raise ProviderError("Ambiente indisponível nesta implantação")

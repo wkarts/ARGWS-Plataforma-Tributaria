@@ -13,7 +13,7 @@ from app.storage import BlobStore
 
 async def bootstrap() -> None:
     settings = get_settings()
-    settings.validate_security()
+    settings.validate_security(require_provider=False)
     username = settings.bootstrap_admin_email.strip().lower()
     async with Session() as session, session.begin():
         existing = await session.scalar(select(User).limit(1) if settings.self_hosted

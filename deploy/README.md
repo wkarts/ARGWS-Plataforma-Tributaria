@@ -121,3 +121,9 @@ DEPLOY_DIR=/srv/reforma-tributaria/production bash scripts/deploy.sh
 O script preserva uma cópia privada anterior do `.env`. Ele **não reverte schema nem dados**; migração incompatível exige restauração coordenada do backup PostgreSQL e S3. Verifique o digest esperado em `IMAGES.txt` e saúde API/web após a reversão.
 
 `retention-report.yml` roda semanalmente só com permissões de leitura. `retention-apply.yml` é exclusivamente manual, exige confirmação, limita a 20 exclusões e preserva todas as versões GHCR com tag e todas as imagens-base. Versões sem tag só podem ser excluídas se seus IDs forem explicitamente aprovados em `.github/retention-policy.json`; a lista nasce vazia porque um digest sem tag ainda pode estar em uso. Caches só são candidatos após 21 dias e chave prefixada `buildkit-`. `scripts/clean_local_cache.sh` opera dry-run por padrão e limita a exclusão a imagens dangling rotuladas deste repositório. Nenhum fluxo apaga volumes.
+
+## Modos CBS e bootstrap de produção
+
+Novas instalações em produção usam `PROVIDER_MODE=disabled`, não `fixture`. Para usar `receita`, configure as credenciais oficiais e habilite explicitamente o ambiente `CBS_PRODUCTION_ENABLED` ou `CBS_RESTRICTED_ENABLED`. O `bootstrap` não precisa que a integração Receita esteja completa para cadastrar o administrador ou verificar o S3. O endpoint `/api/v1/capabilities` informa `official_configuration.ready=false` e as variáveis faltantes **sem expor valores**; os endpoints oficiais rejeitam tentativas enquanto incompletos.
+
+É permitido manter `PROVIDER_MODE=receita` numa instalação que ainda esteja recebendo credenciais: serviços e cadastros locais iniciam, mas não há chamadas CBS oficiais nem retorno fictício. Configurações inválidas de segredo JWT/segurança básica ou falhas reais de PostgreSQL/RustFS continuam bloqueando a inicialização. O deployer permite alterar o modo em `.env` existente com backup, sem modificar senhas ou volumes.

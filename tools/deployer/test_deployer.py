@@ -42,6 +42,7 @@ S3_USE_SSL=false
 SECRET_KEY=
 BOOTSTRAP_ADMIN_EMAIL=
 BOOTSTRAP_ADMIN_PASSWORD=
+PROVIDER_MODE=disabled
 DATABASE_URL=postgresql+asyncpg://reforma:password@postgres:5432/reforma
 REDIS_URL=redis://:password@redis:6379/0
 BROKER_URL=amqp://reforma:password@rabbitmq:5672/
@@ -149,6 +150,42 @@ class DeployerTests(unittest.TestCase):
         self.assertEqual(Path(result["directory"]), folder.resolve())
         self.assertTrue((folder / "compose.yaml").is_file())
         self.assertTrue((folder / ".env").is_file())
+
+    def test_receita_mode_is_explicit_and_fixture_is_rejected_in_production(self) -> None:
+        generated = self.generate(provider_mode="receita")
+        configured = deployer.parse_env((self.output / ".env").read_text())
+        self.assertEqual(generated["provider_mode"], "receita")
+        self.assertEqual(configured["PROVIDER_MODE"], "receita")
+        self.assertEqual(deployer.validate_directory(self.output)["provider_mode"], "receita")
+        with self.assertRaisesRegex(deployer.DeployerError, "não aceita fixture"):
+            self.generate(provider_mode="fixture", force=True)
+
+    def test_provider_update_preserves_secrets_and_backups_existing_installation(self) -> None:
+        self.generate(provider_mode="receita")
+        before = deployer.parse_env((self.output / ".env").read_text())
+        change = deployer.update_provider_mode(self.output, mode="disabled", confirmed=True)
+        after = deployer.parse_env((self.output / ".env").read_text())
+        self.assertEqual(change["provider_mode"], "disabled")
+        self.assertIsNotNone(change["backup_id"])
+        self.assertEqual(after["PROVIDER_MODE"], "disabled")
+        for key in ("SECRET_KEY", "REDIS_PASSWORD", "POSTGRES_PASSWORD", "BOOTSTRAP_ADMIN_PASSWORD"):
+            self.assertEqual(after[key], before[key])
+        self.assertEqual(deployer.update_provider_mode(
+            self.output, mode="disabled", confirmed=True)["changed"], False)
+        with self.assertRaises(deployer.DeployerError):
+            deployer.update_provider_mode(self.output, mode="fixture", confirmed=True)
+        with self.assertRaises(deployer.DeployerError):
+            deployer.update_provider_mode(self.output, mode="receita", confirmed=False)
+
+    def test_provider_update_preserves_old_fixture_secrets_on_conversion(self) -> None:
+        self.generate()
+        path = self.output / ".env"
+        initial = path.read_text()
+        path.write_text(initial.replace("PROVIDER_MODE=disabled", "PROVIDER_MODE=fixture"))
+        output = deployer.update_provider_mode(self.output, mode="disabled", confirmed=True)
+        self.assertTrue(output["changed"])
+        self.assertEqual(deployer.parse_env(path.read_text())["PROVIDER_MODE"], "disabled")
+        self.assertEqual(deployer.validate_directory(self.output)["provider_mode"], "disabled")
 
     def test_force_updates_compose_and_preserves_env_byte_for_byte(self) -> None:
         self.generate()

@@ -17,7 +17,7 @@ from app.db import prepare_self_data
 
 def migrate() -> None:
     settings = get_settings()
-    settings.validate_security()
+    settings.validate_security(require_provider=False)
     if not settings.self_hosted:
         raise RuntimeError("app.self_setup é exclusivo para DEPLOYMENT_MODE=self")
     prepare_self_data(settings)
