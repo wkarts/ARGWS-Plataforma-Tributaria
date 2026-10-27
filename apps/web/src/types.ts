@@ -227,3 +227,72 @@ export interface CommercialInstallment {
   category: "commercial_payment";
   basis: string;
 }
+
+/** The central is an evidence dashboard; it never asserts official assessment coverage. */
+export interface CentralQuery {
+  id: string;
+  resource: Resource;
+  environment: Environment;
+  status: string;
+  ticket: string | null;
+  received_sha256: string | null;
+  has_raw_evidence: boolean;
+  has_error: boolean;
+  poll_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+  official_receipt: boolean;
+}
+
+export interface CentralSummary {
+  company_id: string;
+  cnpj_base: string;
+  counts: {
+    queries: number;
+    active: number;
+    attention: number;
+    completed: number;
+    by_status: Record<string, number>;
+    documents: number;
+    records: number;
+    official_snapshots: number;
+  };
+  recent_queries: CentralQuery[];
+  official_coverage_proven: false;
+  basis: string;
+}
+
+export interface CentralHistory {
+  company_id: string;
+  items: CentralQuery[];
+  next_cursor: string | null;
+}
+
+export type TaxRegime = "regular" | "simples";
+
+export interface TaxCalculationInput {
+  company_id: string;
+  regime: TaxRegime;
+  payload: Record<string, unknown>;
+}
+
+export interface TaxCalculation {
+  id: string;
+  company_id: string;
+  regime: TaxRegime;
+  created_at: string;
+  request_sha256: string;
+  response_sha256: string;
+  engine_version: Record<string, unknown>;
+  totals: Record<string, string>;
+  calculation_source: "local_normative_engine";
+  government_assessment: false;
+  fiscal_credit_appropriated: false;
+  request?: Record<string, unknown>;
+  engine_response?: Record<string, unknown>;
+}
+
+export interface TaxCalculationStatus {
+  regular: { configured: boolean };
+  simples: { configured: boolean };
+}

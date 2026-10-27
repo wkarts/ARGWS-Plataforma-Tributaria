@@ -36,6 +36,10 @@ x-api-environment: &api-environment
   CBS_AUTO_SYNC_ENABLED: ${CBS_AUTO_SYNC_ENABLED:-false}
   CBS_AUTO_SYNC_ENVIRONMENT: ${CBS_AUTO_SYNC_ENVIRONMENT:-restricted}
   CBS_AUTO_SYNC_RESOURCES: ${CBS_AUTO_SYNC_RESOURCES:-debitos,creditos}
+  TAX_CALCULATOR_REGULAR_URL: ${TAX_CALCULATOR_REGULAR_URL:-}
+  TAX_CALCULATOR_REGULAR_VERSION_URL: ${TAX_CALCULATOR_REGULAR_VERSION_URL:-}
+  TAX_CALCULATOR_SIMPLES_URL: ${TAX_CALCULATOR_SIMPLES_URL:-}
+  TAX_CALCULATOR_SIMPLES_VERSION_URL: ${TAX_CALCULATOR_SIMPLES_VERSION_URL:-}
 
 x-api-image: &api-image ghcr.io/${IMAGE_OWNER:-wkarts}/reforma-tributaria-api:${APP_TAG:?Defina APP_TAG}
 x-api-dependencies: &api-dependencies
@@ -69,6 +73,7 @@ services:
 
   api:
     image: *api-image
+    extra_hosts: ["host.docker.internal:host-gateway"]
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers", "--no-access-log"]
     environment: *api-environment
     depends_on:
