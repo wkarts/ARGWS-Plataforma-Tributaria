@@ -131,20 +131,15 @@ if [[ "$CHANNEL" == develop ]]; then
     done
     gh release upload "$preview_tag" "$files"/* --clobber --repo "$GITHUB_REPOSITORY"
   else
-    python3 - "$files" "$remote" <<'PY'
-import hashlib
-from pathlib import Path
-import sys
+    # Uma pré-release já publicada não sofre mutações no retry: aproveite
+    # somente os artefatos publicados, após conferir SHA, versão e digests.
+    [[ -f "$remote/BUILD-INFO.txt" && -f "$remote/IMAGES.txt" && -f "$remote/SHA256SUMS.txt" ]] || {
+      echo "Pré-release publicada incompleta" >&2; exit 1;
+    }
+    grep -Fx "Commit=$GITHUB_SHA" "$remote/BUILD-INFO.txt" >/dev/null
+    grep -Fx "Version=$VERSION" "$remote/BUILD-INFO.txt" >/dev/null
+    cmp "$files/IMAGES.txt" "$remote/IMAGES.txt"
 
-expected, present = (Path(p) for p in sys.argv[1:])
-local = {p.name: p for p in expected.iterdir() if p.is_file()}
-remote = {p.name: p for p in present.iterdir() if p.is_file()}
-if unknown := remote.keys() - local.keys():
-    raise SystemExit(f"Assets remotos inesperados: {sorted(unknown)}")
-for name, path in remote.items():
-    if hashlib.sha256(path.read_bytes()).digest() != hashlib.sha256(local[name].read_bytes()).digest():
-        raise SystemExit(f"Pré-release publicada divergente do commit: {name}")
-PY
   fi
 
   gh release download "$preview_tag" --dir "$verified" --repo "$GITHUB_REPOSITORY"
@@ -156,7 +151,9 @@ expected, actual = ({p.name for p in Path(arg).iterdir() if p.is_file()} for arg
 if expected != actual:
     raise SystemExit(f"Assets faltantes ou extras: {sorted(expected ^ actual)}")
 PY
-  cmp "$files/SHA256SUMS.txt" "$verified/SHA256SUMS.txt"
+  if [[ "$draft" == true ]]; then
+    cmp "$files/SHA256SUMS.txt" "$verified/SHA256SUMS.txt"
+  fi
   (cd "$verified" && sha256sum -c SHA256SUMS.txt)
 
   if [[ "$draft" == true ]]; then
