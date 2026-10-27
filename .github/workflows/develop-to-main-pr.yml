@@ -1,75 +1,301 @@
-name: Create develop-to-main promotion PR
+name: Promote verified develop to main
 
 on:
-  push:
+  workflow_run:
+    workflows: ["GHCR publish and release"]
+    types: [completed]
     branches: [develop]
   workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "Commit da develop a recuperar (vazio = HEAD)"
+        required: false
+        type: string
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
+  actions: write
 
 concurrency:
-  group: fiscal-develop-to-main-promotion
+  group: fiscal-verified-develop-to-main
   cancel-in-progress: false
 
 jobs:
-  promotion-pr:
-    if: github.repository == 'wkarts/ARGWS-Plataforma-Tributaria'
+  promote:
+    if: >-
+      github.repository == 'wkarts/ARGWS-Plataforma-Tributaria' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'develop' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 180
+    env:
+      REPO: ${{ github.repository }}
+      SOURCE_EVENT_SHA: ${{ github.event.workflow_run.head_sha || inputs.source_sha }}
     steps:
-      - name: Create or reuse main promotion pull request
+      - name: Checkout trusted default branch and read history
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ secrets.PROMOTION_PR_TOKEN || github.token }}
+
+      - name: Confirm successful develop release and immutable evidence
+        id: evidence
         env:
           GH_TOKEN: ${{ secrets.PROMOTION_PR_TOKEN || github.token }}
+          EVENT_NAME: ${{ github.event_name }}
         shell: bash
         run: |
           set -euo pipefail
-          repo="$GITHUB_REPOSITORY"
-          existing="$(gh pr list --repo "$repo" --head develop --base main --state open --json number --jq '.[0].number // empty')"
-          if [[ -n "$existing" ]]; then
-            echo "PR #$existing já existe e acompanhará automaticamente a branch develop."
-            echo "PR existente: https://github.com/$repo/pull/$existing" >> "$GITHUB_STEP_SUMMARY"
+          source_sha="${SOURCE_EVENT_SHA:-}"
+          git fetch --prune origin main develop --tags
+          develop_sha="$(git rev-parse origin/develop)"
+          main_sha="$(git rev-parse origin/main)"
+          if [[ -z "$source_sha" ]]; then source_sha="$develop_sha"; fi
+          [[ "$source_sha" =~ ^[a-f0-9]{40}$ ]] || { echo "::error::SHA da develop inválido"; exit 1; }
+          if [[ "$source_sha" != "$develop_sha" ]]; then
+            echo "Develop avançou: não promover commit anterior $source_sha."
+            echo "promote=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          compare="$(gh api "repos/$repo/compare/main...develop")"
-          ahead="$(jq -r '.ahead_by' <<< "$compare")"
-          [[ "$ahead" =~ ^[0-9]+$ ]] || { echo "::error::Comparação de branches inválida"; exit 1; }
+          ahead="$(gh api "repos/$REPO/compare/main...develop" --jq '.ahead_by')"
+          [[ "$ahead" =~ ^[0-9]+$ ]] || { echo "::error::Comparação main/develop inválida"; exit 1; }
           if (( ahead == 0 )); then
-            echo "Sem novos commits para promover da develop para main."
+            echo "Main já contém a develop; sem promoção pendente."
+            echo "promote=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          source_sha="$(gh api "repos/$repo/git/ref/heads/develop" --jq '.object.sha')"
-          body="$RUNNER_TEMP/promocao-main.md"
-          cat > "$body" <<'EOF'
-          ## Promoção da develop para main
-
-          Esta PR é aberta automaticamente quando a develop recebe novos commits. Ela acompanha a branch de origem, portanto novos merges entram na mesma PR.
-
-          **Origem:** `develop` (o HEAD atualizado aparece na PR).
-
-          ### Condições obrigatórias antes do merge
-          - [ ] CI e compilações aprovados no HEAD atual.
-          - [ ] GHCR e pré-release por SHA publicados e conferidos.
-          - [ ] Versão SemVer nova em `VERSION` (nunca reutilizar uma tag estável).
-          - [ ] Auditoria dos artefatos, migrations e integridade aprovada.
-          - [ ] Revisão e autorização explícita da promoção para main.
-
-          **Sem merge e sem deploy automáticos.**
-          EOF
-          printf '\n**SHA observado:** `%s`.\n' "$source_sha" >> "$body"
-          if gh pr create --repo "$repo" --base main --head develop --draft \
-              --title "release: promover develop para main" --body-file "$body"; then
-            echo "PR de promoção criada." >> "$GITHUB_STEP_SUMMARY"
-          else
-            # Outra execução pode ter criado a mesma PR durante a checagem.
-            existing="$(gh pr list --repo "$repo" --head develop --base main --state open --json number --jq '.[0].number // empty')"
-            if [[ -n "$existing" ]]; then
-              echo "PR #$existing já existe; nenhuma duplicação." >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            echo "::error::Sem permissão para criar PR. Habilite Settings > Actions > General > Allow GitHub Actions to create and approve pull requests ou configure o segredo PROMOTION_PR_TOKEN com permissão Pull requests: write."
-            exit 1
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            # Manual recovery must never bypass a failed or absent publisher.
+            published="$(gh run list --repo "$REPO" --workflow ghcr-publish.yml \
+              --branch develop --commit "$source_sha" --limit 60 \
+              --json conclusion,headSha \
+              --jq ".[] | select(.headSha == \"$source_sha\" and .conclusion == \"success\") | .headSha" | head -n1)"
+            [[ "$published" == "$source_sha" ]] || {
+              echo "::error::Não há publicação da develop aprovada nesse commit"; exit 1;
+            }
           fi
+
+          develop_version="$(git show origin/develop:VERSION | tr -d '\r\n')"
+          preview="v${develop_version}-develop.${source_sha:0:12}"
+          ref_sha="$(gh api "repos/$REPO/git/ref/tags/$preview" --jq '.object.sha')"
+          ref_type="$(gh api "repos/$REPO/git/ref/tags/$preview" --jq '.object.type')"
+          if [[ "$ref_type" == tag ]]; then
+            ref_sha="$(gh api "repos/$REPO/git/tags/$ref_sha" --jq '.object.sha')"
+          fi
+          [[ "$ref_sha" == "$source_sha" ]] || {
+            echo "::error::Tag de pré-release não corresponde à develop validada"; exit 1;
+          }
+          [[ "$(gh release view "$preview" --repo "$REPO" --json isDraft --jq '.isDraft')" == false ]] || {
+            echo "::error::Pré-release está em draft"; exit 1;
+          }
+          [[ "$(gh release view "$preview" --repo "$REPO" --json isPrerelease --jq '.isPrerelease')" == true ]] || {
+            echo "::error::Versão sem indicador de pré-release"; exit 1;
+          }
+          assets="$(gh release view "$preview" --repo "$REPO" --json assets --jq '.assets[].name')"
+          for required in BUILD-INFO.txt IMAGES.txt BASE-IMAGES.txt SHA256SUMS.txt \
+            Fiscal-Self-Deploy-preview.zip Fiscal-Deploy-Matrix-preview.zip \
+            Fiscal-Deployer-GUI-Windows-x64.zip fiscal-xml-collector-setup-windows-x64.exe \
+            fiscal-xml-collector-gui-linux-x64.tar.gz; do
+            grep -Fx "$required" <<< "$assets" >/dev/null || {
+              echo "::error::Pré-release sem $required"; exit 1;
+            }
+          done
+          evidence_dir="$RUNNER_TEMP/fiscal-promotion-evidence"
+          mkdir -p "$evidence_dir"
+          for item in BUILD-INFO.txt IMAGES.txt SHA256SUMS.txt; do
+            gh release download "$preview" --pattern "$item" --dir "$evidence_dir" --repo "$REPO"
+          done
+          grep -Fx "Commit=$source_sha" "$evidence_dir/BUILD-INFO.txt" >/dev/null
+          grep -Fx "Version=$develop_version" "$evidence_dir/BUILD-INFO.txt" >/dev/null
+          grep -E '^ghcr\.io/.+/reforma-tributaria-(api|web)@sha256:[0-9a-f]{64}$' \
+            "$evidence_dir/IMAGES.txt" | grep -q 'reforma-tributaria-api@'
+          grep -E '^ghcr\.io/.+/reforma-tributaria-(api|web)@sha256:[0-9a-f]{64}$' \
+            "$evidence_dir/IMAGES.txt" | grep -q 'reforma-tributaria-web@'
+          awk '$2=="BUILD-INFO.txt" || $2=="IMAGES.txt" {print}' \
+            "$evidence_dir/SHA256SUMS.txt" > "$evidence_dir/SHA256SUMS-selected.txt"
+          [[ "$(wc -l < "$evidence_dir/SHA256SUMS-selected.txt")" -eq 2 ]]
+          (cd "$evidence_dir" && sha256sum -c SHA256SUMS-selected.txt)
+
+          echo "promote=true" >> "$GITHUB_OUTPUT"
+          echo "develop_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "main_sha=$main_sha" >> "$GITHUB_OUTPUT"
+          echo "preview=$preview" >> "$GITHUB_OUTPUT"
+          echo "Pré-release $preview validada para promoção." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prepare a unique stable version without rewriting develop
+        id: prepare
+        if: steps.evidence.outputs.promote == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PROMOTION_PR_TOKEN || github.token }}
+          DEVELOP_SHA: ${{ steps.evidence.outputs.develop_sha }}
+          MAIN_SHA: ${{ steps.evidence.outputs.main_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --prune origin main develop --tags
+          [[ "$(git rev-parse origin/main)" == "$MAIN_SHA" ]] || {
+            echo "::error::Main mudou durante a promoção; não sobrescrever trabalho"; exit 1;
+          }
+          [[ "$(git rev-parse origin/develop)" == "$DEVELOP_SHA" ]] || {
+            echo "::error::Develop mudou; nova promoção deverá usar o HEAD atual"; exit 1;
+          }
+          main_version="$(git show origin/main:VERSION | tr -d '\r\n')"
+          dev_version="$(git show origin/develop:VERSION | tr -d '\r\n')"
+          target_version="$(python3 scripts/release_promotion_version.py \
+            --main-version "$main_version" \
+            --develop-version "$dev_version" \
+            --existing-tags "$(git tag --list 'v*')")"
+          branch="release/auto-${DEVELOP_SHA:0:12}"
+
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null; then
+            git fetch origin "refs/heads/$branch:refs/remotes/origin/$branch"
+            git checkout -B "$branch" "origin/$branch"
+            git merge-base --is-ancestor origin/main HEAD || {
+              echo "::error::Branch de promoção existente não contém main atual"; exit 1;
+            }
+            git merge-base --is-ancestor origin/develop HEAD || {
+              echo "::error::Branch de promoção existente não contém develop atual"; exit 1;
+            }
+            [[ "$(cat VERSION)" == "$target_version" ]] || {
+              echo "::error::Branch de promoção existente tem outra versão; revisão necessária"; exit 1;
+            }
+          else
+            git checkout -B "$branch" origin/main
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            if ! git merge --no-ff --no-edit origin/develop; then
+              git merge --abort || true
+              echo "::error::Conflito no merge develop/main; promoção interrompida"; exit 1;
+            fi
+            python3 scripts/version.py set "$target_version"
+            python3 scripts/version.py check
+            python3 scripts/validate_release.py
+            python3 scripts/validate_deploys.py
+            git add VERSION apps/api/pyproject.toml apps/web/package.json apps/web/package-lock.json
+            git commit -m "chore(release): preparar v$target_version com develop ${DEVELOP_SHA:0:12}"
+            git push origin "HEAD:refs/heads/$branch"
+          fi
+          sha="$(git rev-parse HEAD)"
+          echo "version=$target_version" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Branch de promoção $branch (v$target_version)." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create or reuse the promotion PR
+        id: pr
+        if: steps.evidence.outputs.promote == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PROMOTION_PR_TOKEN || github.token }}
+          PROMOTION_BRANCH: ${{ steps.prepare.outputs.branch }}
+          STABLE_VERSION: ${{ steps.prepare.outputs.version }}
+          VERIFIED_SHA: ${{ steps.evidence.outputs.develop_sha }}
+          VERIFIED_PREVIEW: ${{ steps.evidence.outputs.preview }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          number="$(gh pr list --repo "$REPO" --base main --head "$PROMOTION_BRANCH" \
+            --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "$number" ]]; then
+            body="$RUNNER_TEMP/main-release-pr.md"
+            cat > "$body" <<EOF
+          Promoção automatizada e auditável.
+
+          Origem aprovada: $VERIFIED_SHA
+          Pré-release validada: $VERIFIED_PREVIEW
+          Versão estável reservada: v$STABLE_VERSION
+
+          O fluxo só mescla esta PR após novo CI verde para esta branch.
+          A tag e release estável serão geradas por build posterior no main.
+          Nenhuma stack de cliente é implantada automaticamente.
+          EOF
+            if ! gh pr create --repo "$REPO" --head "$PROMOTION_BRANCH" --base main \
+                 --title "release: publicar v$STABLE_VERSION de develop" --body-file "$body"; then
+              number="$(gh pr list --repo "$REPO" --base main --head "$PROMOTION_BRANCH" \
+                --state open --json number --jq '.[0].number // empty')"
+              [[ -n "$number" ]] || {
+                echo "::error::Criação de PR bloqueada. Habilite criação de PR por Actions ou configure PROMOTION_PR_TOKEN."; exit 1;
+              }
+            fi
+          fi
+          if [[ -z "$number" ]]; then
+            number="$(gh pr view "$PROMOTION_BRANCH" --repo "$REPO" --json number --jq '.number')"
+          fi
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          echo "PR de release: https://github.com/$REPO/pull/$number" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run full CI on the versioned promotion commit
+        if: steps.evidence.outputs.promote == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROMOTION_BRANCH: ${{ steps.prepare.outputs.branch }}
+          PROMOTION_SHA: ${{ steps.prepare.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run ci.yml --repo "$REPO" --ref "$PROMOTION_BRANCH"
+          run_id=""
+          for attempt in {1..45}; do
+            run_id="$(gh run list --repo "$REPO" --workflow ci.yml \
+              --branch "$PROMOTION_BRANCH" --event workflow_dispatch --limit 40 \
+              --json databaseId,headSha \
+              --jq ".[] | select(.headSha == \"$PROMOTION_SHA\") | .databaseId" | head -n1)"
+            [[ -n "$run_id" ]] && break
+            sleep 5
+          done
+          [[ -n "$run_id" ]] || { echo "::error::CI de promoção não foi iniciado"; exit 1; }
+          echo "Validando CI de promoção: https://github.com/$REPO/actions/runs/$run_id" >> "$GITHUB_STEP_SUMMARY"
+          gh run watch "$run_id" --exit-status --repo "$REPO"
+
+      - name: Merge validated PR to main and dispatch the stable release
+        if: steps.evidence.outputs.promote == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_SHA: ${{ steps.evidence.outputs.develop_sha }}
+          BASE_SHA: ${{ steps.evidence.outputs.main_sha }}
+          PROMOTION_SHA: ${{ steps.prepare.outputs.sha }}
+          STABLE_VERSION: ${{ steps.prepare.outputs.version }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(gh api "repos/$REPO/git/ref/heads/develop" --jq '.object.sha')" == "$VERIFIED_SHA" ]] || {
+            echo "::error::Develop mudou depois do CI; não mesclar revisão antiga"; exit 1;
+          }
+          [[ "$(gh api "repos/$REPO/git/ref/heads/main" --jq '.object.sha')" == "$BASE_SHA" ]] || {
+            echo "::error::Main mudou depois do CI; refazer a promoção"; exit 1;
+          }
+          [[ "$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid --jq '.headRefOid')" == "$PROMOTION_SHA" ]] || {
+            echo "::error::PR sofreu alteração durante a validação"; exit 1;
+          }
+          if gh api "repos/$REPO/git/ref/tags/v$STABLE_VERSION" >/dev/null 2>&1; then
+            echo "::error::Versão estável foi reservada por outra execução"; exit 1;
+          fi
+
+          mergeable=""
+          for attempt in {1..20}; do
+            mergeable="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json mergeable --jq '.mergeable')"
+            [[ "$mergeable" != UNKNOWN ]] && break
+            sleep 3
+          done
+          [[ "$mergeable" == MERGEABLE ]] || {
+            echo "::error::PR não está pronta para merge sem conflitos"; exit 1;
+          }
+          gh pr merge "$PR_NUMBER" --repo "$REPO" --merge --delete-branch
+          merged="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json mergeCommit --jq '.mergeCommit.oid')"
+          current="$(gh api "repos/$REPO/git/ref/heads/main" --jq '.object.sha')"
+          [[ -n "$merged" && "$current" == "$merged" ]] || {
+            echo "::error::Main não corresponde ao merge validado; publicação manual bloqueada"; exit 1;
+          }
+
+          # GITHUB_TOKEN does not trigger ordinary push workflows. Explicit
+          # workflow_dispatch is required to build and publish main.
+          gh workflow run ghcr-publish.yml --repo "$REPO" --ref main
+          echo "PR #$PR_NUMBER mesclada automaticamente em $merged." >> "$GITHUB_STEP_SUMMARY"
+          echo "Publicação estável v$STABLE_VERSION disparada no main." >> "$GITHUB_STEP_SUMMARY"
