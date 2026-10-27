@@ -10,7 +10,6 @@ O cálculo e a memória retornados pelo componente local **não constituem a apu
 
 Consulte a documentação mantida pela administração tributária:
 
-- https://piloto-cbs.tributos.gov.br/servico/calculadora-consumo/calculadora/calculadora-offline-calculadora-offline-instrucoes
 - https://piloto-cbs.tributos.gov.br/servico/calculadora-consumo/calculadora/calculadora-offline/calculadora-offline-instrucoes
 - https://piloto-cbs.tributos.gov.br/servico/calculadora-consumo/calculadora/documentacao
 
