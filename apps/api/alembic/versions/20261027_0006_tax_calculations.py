@@ -26,17 +26,16 @@ def upgrade() -> None:
         sa.Column("response_json", sa.JSON(), nullable=False),
         sa.Column("engine_version_json", sa.JSON(), nullable=False),
         sa.Column("calculated_totals_json", sa.JSON(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False))
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.UniqueConstraint("organization_id", "company_id", "idempotency_key",
+                            name="uq_tax_calculation_idempotency"))
     op.create_index("ix_tax_calculations_organization_id", "tax_calculations", ["organization_id"])
     op.create_index("ix_tax_calculations_company_id", "tax_calculations", ["company_id"])
     op.create_index("ix_tax_calc_company_created", "tax_calculations",
                     ["organization_id", "company_id", "created_at"])
-    op.create_unique_constraint("uq_tax_calculation_idempotency", "tax_calculations",
-                                ["organization_id", "company_id", "idempotency_key"])
 
 
 def downgrade() -> None:
-    op.drop_constraint("uq_tax_calculation_idempotency", "tax_calculations", type_="unique")
     op.drop_index("ix_tax_calc_company_created", table_name="tax_calculations")
     op.drop_index("ix_tax_calculations_company_id", table_name="tax_calculations")
     op.drop_index("ix_tax_calculations_organization_id", table_name="tax_calculations")
