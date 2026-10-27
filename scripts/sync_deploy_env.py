@@ -14,8 +14,8 @@ import shutil
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGETS = ("docker", "dockge", "portainer", "cloudpanel", "canonical")
-CHANNELS = ("develop", "production")
+TARGETS = ("docker", "dockge", "portainer", "cloudpanel", "canonical", "self")
+CHANNELS = ("develop", "production", "self")
 OPTIONAL_KEYS = (
     "TAX_CALCULATOR_REGULAR_URL", "TAX_CALCULATOR_REGULAR_VERSION_URL",
     "TAX_CALCULATOR_SIMPLES_URL", "TAX_CALCULATOR_SIMPLES_VERSION_URL",
@@ -41,6 +41,12 @@ def read_keys(text: str) -> dict[str, str]:
 def template_path(target: str, channel: str) -> Path:
     if target not in TARGETS or channel not in CHANNELS:
         raise ValueError("Destino ou canal inválido")
+    if target == "self":
+        if channel != "self":
+            raise ValueError("Instalação self exige canal self")
+        return ROOT / "deploy" / "self" / ".env.example"
+    if channel == "self":
+        raise ValueError("Canal self é exclusivo do destino self")
     parent = ROOT / "deploy" if target == "canonical" else ROOT / "deploy" / target
     return parent / channel / ".env.example"
 

@@ -271,7 +271,7 @@ jobs:
           fi
           label="$VERSION"
           [[ "$CHANNEL" == develop ]] && label=preview
-          zip -q -r "release-files/Fiscal-Self-Deploy-$label.zip" deploy/self apps/api apps/web infra/docker/nginx.conf VERSION \
+          zip -q -r "release-files/Fiscal-Self-Deploy-$label.zip" deploy/self apps/api apps/web infra/docker/nginx.conf scripts/sync_deploy_env.py VERSION \
             -x '*/.env' '*/secrets/*' '*/backups/*' '*/volumes/*' \
                '*/node_modules/*' '*/dist/*' '*/.venv/*' '*/__pycache__/*' \
                '*/*.egg-info/*' '*.pyc' '*.sqlite3' '*.db' '*.pem' '*.p12' '*.pfx' '*.log'
@@ -284,7 +284,8 @@ jobs:
               names = set(archive.namelist())
               required = {'deploy/self/compose.yaml', 'deploy/self/api.Dockerfile',
                           'deploy/self/web.Dockerfile', 'apps/api/pyproject.toml',
-                          'apps/web/package.json', 'infra/docker/nginx.conf', 'VERSION'}
+                          'apps/web/package.json', 'infra/docker/nginx.conf',
+                          'scripts/sync_deploy_env.py', 'VERSION'}
               missing = required - names
               forbidden = [name for name in names if name.startswith('deploy/') and not name.startswith('deploy/self/')]
               if missing or forbidden:

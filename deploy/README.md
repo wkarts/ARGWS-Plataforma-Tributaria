@@ -40,7 +40,7 @@ Cada regime exige a URL de cálculo e a URL de versão, com o mesmo host e porta
 
 Deixar as quatro variáveis vazias desabilita o cálculo, sem interromper os demais módulos. O serviço fiscal local não é baixado ou iniciado automaticamente, e a configuração nunca cria alíquotas ou resultados hipotéticos. Consulte `docs/CALCULO-TRIBUTARIO-LOCAL.md` para a versão do contrato utilizada.
 
-Os modelos oficiais são `deploy/compose.yaml`, `deploy/env.develop.example` e `deploy/env.production.example`. `scripts/generate_deploys.py` propaga alterações aos dez diretórios derivados. O `.env` privado de uma instalação não é alterado pelo gerador. Para acrescentar apenas os novos parâmetros opcionais sem substituir segredos, use `scripts/sync_deploy_env.py` com confirmação explícita. O merge atualiza artefatos de distribuição; **não realiza deploy remoto em servidores de clientes**.
+Os modelos oficiais são `deploy/compose.yaml`, `deploy/env.develop.example` e `deploy/env.production.example`. `scripts/generate_deploys.py` propaga alterações aos dez diretórios derivados. O `.env` privado de uma instalação não é alterado pelo gerador. Para acrescentar apenas os novos parâmetros opcionais sem substituir segredos, use `scripts/sync_deploy_env.py --directory DIRETORIO --target docker|dockge|portainer|cloudpanel|canonical --channel develop|production --apply`, após conferir o diagnóstico sem `--apply`. No perfil self, use `--target self --channel self`. O merge atualiza artefatos de distribuição; **não realiza deploy remoto em servidores de clientes**.
 
 ## Desenvolvimento local sem GHCR
 

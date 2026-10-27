@@ -16,6 +16,12 @@ class SyncDeployEnvTests(unittest.TestCase):
                 with self.subTest(target=target, channel=channel):
                     found = read_keys(template_path(target, channel).read_text(encoding="utf-8"))
                     self.assertTrue(all(found.get(key) == "" for key in OPTIONAL_KEYS))
+        self.assertTrue(all(read_keys(template_path("self", "self").read_text()).get(key) == ""
+                            for key in OPTIONAL_KEYS))
+        with self.assertRaises(ValueError):
+            template_path("self", "production")
+        with self.assertRaises(ValueError):
+            template_path("docker", "self")
 
     def test_update_preserves_existing_values_and_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
