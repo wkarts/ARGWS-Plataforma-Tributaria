@@ -268,47 +268,31 @@ export interface CentralHistory {
   next_cursor: string | null;
 }
 
-export type SimulationMode = "regular" | "simples";
+export type TaxRegime = "regular" | "simples";
 
-export interface ReformSimulationInput {
+export interface TaxCalculationInput {
   company_id: string;
-  period: string;
-  mode: SimulationMode;
-  revenue: string;
-  purchases: string;
-  cbs_sales_rate: string;
-  ibs_sales_rate: string;
-  cbs_purchase_rate: string;
-  ibs_purchase_rate: string;
-  das_effective_rate?: string;
-  das_cbs_component_rate?: string;
-  das_ibs_component_rate?: string;
+  regime: TaxRegime;
+  payload: Record<string, unknown>;
 }
 
-export interface ReformSimulation {
+export interface TaxCalculation {
+  id: string;
   company_id: string;
-  period: string;
-  mode: SimulationMode;
-  source: "operator_defined_hypothesis";
-  official_assessment: false;
-  official_coverage_proven: false;
-  regular: {
-    cbs_debit: string;
-    ibs_debit: string;
-    cbs_potential_purchase_tax: string;
-    ibs_potential_purchase_tax: string;
-    theoretical_net: string;
-    credit_to_appropriate: null;
-    credit_appropriated: null;
-    credit_used: null;
-  };
-  simples: {
-    das_total_estimate: string;
-    das_cbs_component_estimate: string;
-    das_ibs_component_estimate: string;
-    das_other_component_estimate: string;
-    regular_option_combined_hypothesis: string;
-    difference_regular_minus_simples: string;
-  } | null;
-  warnings: string[];
+  regime: TaxRegime;
+  created_at: string;
+  request_sha256: string;
+  response_sha256: string;
+  engine_version: Record<string, unknown>;
+  totals: Record<string, string>;
+  calculation_source: "local_normative_engine";
+  government_assessment: false;
+  fiscal_credit_appropriated: false;
+  request?: Record<string, unknown>;
+  engine_response?: Record<string, unknown>;
+}
+
+export interface TaxCalculationStatus {
+  regular: { configured: boolean };
+  simples: { configured: boolean };
 }
