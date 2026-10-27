@@ -766,7 +766,10 @@ onBeforeUnmount(() => {
               <strong>Integração Receita pendente:</strong>
               {{ capabilities?.official_configuration?.reason ||
                  "Configure as credenciais oficiais e habilite o ambiente correto." }}
-              Cadastros, XMLs e consultas locais continuam disponíveis.
+              <span v-if="isAdmin() && capabilities?.official_configuration?.missing?.length">
+                Parâmetros pendentes: {{ capabilities.official_configuration.missing.join(", ") }}.
+              </span>
+              Cadastros e XMLs locais continuam disponíveis.
             </span>
           </div>
           <div v-if="officialDisabled" class="notice warning">

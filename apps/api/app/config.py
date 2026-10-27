@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     deployment_mode: str = "central"
+    app_env: str = "development"
     self_data_dir: str = "./data"
 
     postgres_host: str = "localhost"
@@ -137,6 +138,10 @@ class Settings(BaseSettings):
     def validate_security(self, *, require_provider: bool = True) -> None:
         if self.deployment_mode not in {"central", "self"}:
             raise RuntimeError("DEPLOYMENT_MODE inválido")
+        if self.app_env not in {"production", "development", "develop", "test"}:
+            raise RuntimeError("APP_ENV inválido")
+        if self.app_env == "production" and self.provider_mode == "fixture":
+            raise RuntimeError("Produção não permite PROVIDER_MODE=fixture com dados simulados")
         if self.self_hosted:
             if self.database_url_override:
                 raise RuntimeError("No modo self configure SELF_DATA_DIR, não DATABASE_URL_OVERRIDE")
