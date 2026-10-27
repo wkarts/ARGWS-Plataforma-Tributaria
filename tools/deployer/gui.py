@@ -75,7 +75,9 @@ def parsed_backend(message: str) -> dict:
 
 
 def suggested_folder(target: str, channel: str) -> str:
-    return str(Path.home() / "Gestao-Fiscal" / target / channel)
+    # Preserve the original Windows location for Docker installations.
+    base = Path.home() / "Gestao-Fiscal"
+    return str(base / channel if target == "docker" else base / target / channel)
 
 
 def should_replace_port(value: str, previous_auto: int | None) -> bool:
