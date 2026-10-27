@@ -17,6 +17,11 @@ import type {
   Resource,
   StockCreditClaim,
   User,
+  CentralSummary,
+  CentralHistory,
+  TaxCalculation,
+  TaxCalculationInput,
+  TaxCalculationStatus,
 } from "./types.ts";
 
 declare global {
@@ -277,6 +282,40 @@ export class ApiClient {
         amount,
         paid_at: paidAt,
       }),
+    });
+  }
+
+  centralSummary(companyId: string) {
+    const params = new URLSearchParams({ company_id: companyId });
+    return this.request<CentralSummary>(`/central/summary?${params.toString()}`);
+  }
+
+  centralHistory(companyId: string, cursor?: string, environment?: Environment) {
+    const params = new URLSearchParams({ company_id: companyId });
+    if (cursor) params.set("cursor", cursor);
+    if (environment) params.set("environment", environment);
+    return this.request<CentralHistory>(`/central/history?${params.toString()}`);
+  }
+
+  calculatorStatus() {
+    return this.request<TaxCalculationStatus>("/tax-calculator/status");
+  }
+
+  taxCalculations(companyId: string, cursor?: string) {
+    const params = new URLSearchParams({ company_id: companyId });
+    if (cursor) params.set("cursor", cursor);
+    return this.request<ListResponse<TaxCalculation>>(`/tax-calculations?${params.toString()}`);
+  }
+
+  taxCalculation(id: string) {
+    return this.request<TaxCalculation>(`/tax-calculations/${encodeURIComponent(id)}`);
+  }
+
+  calculateTax(input: TaxCalculationInput, idempotencyKey: string) {
+    return this.request<TaxCalculation>("/tax-calculations", {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(input),
     });
   }
 
