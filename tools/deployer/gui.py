@@ -100,6 +100,8 @@ class DeployerWindow(tk.Tk):
         self.vars = {
             "target": tk.StringVar(value="docker"),
             "channel": tk.StringVar(value="production"),
+            "provider_mode": tk.StringVar(value="disabled"),
+            "provider_description": tk.StringVar(value=""),
             "owner": tk.StringVar(value="Detectando no modelo…"),
             "admin_email": tk.StringVar(),
             "tag": tk.StringVar(value="latest"),
@@ -111,6 +113,8 @@ class DeployerWindow(tk.Tk):
             "catalog_status": tk.StringVar(value="Consultando versões publicadas…"),
         }
         self._build()
+        self.vars["provider_mode"].trace_add("write", self._mode_changed)
+        self._mode_changed()
         self.vars["channel"].trace_add("write", self._configuration_changed)
         self.vars["target"].trace_add("write", self._configuration_changed)
         self.after(50, self._reload_choices)
@@ -168,6 +172,19 @@ class DeployerWindow(tk.Tk):
             wraplength=720, foreground="#4b5563",
         ).grid(row=10, column=0, columnspan=3, sticky="w")
 
+        ttk.Label(setup, text="Integração CBS / PROVIDER_MODE").grid(
+            row=11, column=0, sticky="w", padx=(0, 8), pady=(8, 2)
+        )
+        self.provider_combo = ttk.Combobox(
+            setup, textvariable=self.vars["provider_mode"],
+            values=("disabled", "receita"), state="readonly",
+        )
+        self.provider_combo.grid(row=11, column=1, sticky="ew", pady=(8, 2))
+        ttk.Label(
+            setup, textvariable=self.vars["provider_description"],
+            wraplength=710, foreground="#526577",
+        ).grid(row=12, column=0, columnspan=3, sticky="w", pady=(0, 8))
+
         self._entry(operation, "Tag de rollback (opcional)", "rollback_tag", 0)
         ttk.Label(
             operation, text="Deploy local requer Docker Compose neste computador. "
@@ -188,6 +205,7 @@ class DeployerWindow(tk.Tk):
             ("Status", self.status), ("Deploy local", self.deploy),
             ("Atualizar versão", self.upgrade), ("Rollback", self.rollback),
             ("Recuperar", self.recover), ("Exportar ZIP", self.export),
+            ("Aplicar modo CBS", self.update_provider),
         )
         for index, (label, action) in enumerate(actions):
             button = ttk.Button(buttons, text=label, command=action)
@@ -230,6 +248,15 @@ class DeployerWindow(tk.Tk):
         ).grid(row=row, column=1, sticky="ew", pady=5)
         parent.columnconfigure(1, weight=1)
 
+    def _mode_changed(self, *_: object) -> None:
+        mode = self.vars["provider_mode"].get()
+        messages = {
+            "disabled": "Sem integração Receita: cadastro, XMLs e apuração preliminar local continuam funcionando. Não realiza consultas oficiais.",
+            "receita": "Conexão oficial com a Receita: requer CBS_TOKEN_URL, CLIENT_ID, CLIENT_SECRET, callback HTTPS, organização autorizada, CNPJ base e ambiente liberado. Sem isso, consultas ficam bloqueadas, sem dados simulados.",
+            "fixture": "Dados fictícios exclusivamente para testes no canal develop. Nunca utilizar em produção.",
+        }
+        self.vars["provider_description"].set(messages.get(mode, "Modo desconhecido"))
+
     def _configuration_changed(self, *_: object) -> None:
         target = self.vars["target"].get()
         channel = self.vars["channel"].get()
@@ -238,6 +265,9 @@ class DeployerWindow(tk.Tk):
             self.vars["output"].set(folder)
         self._default_folder = folder
         self.vars["tag"].set("latest" if channel == "production" else "develop")
+        self.provider_combo.configure(values=("disabled", "receita") if channel == "production"
+                                      else ("disabled", "receita", "fixture"))
+        self.vars["provider_mode"].set("disabled" if channel == "production" else "fixture")
         self._reload_choices()
 
     def _reload_choices(self) -> None:
@@ -265,6 +295,7 @@ class DeployerWindow(tk.Tk):
         if identity != self._request_generation:
             return
         self.vars["owner"].set(str(data["owner"]))
+        self.vars["provider_mode"].set(str(data.get("provider_mode", "disabled")))
         port = int(data["web_port"])
         if should_replace_port(self.vars["port"].get(), self._default_port):
             self.vars["port"].set(str(port))
@@ -389,6 +420,7 @@ class DeployerWindow(tk.Tk):
                     + "\n\nTag fixada: " + str(data["tag"])
                     + "\nOwner GHCR: " + str(data["owner"])
                     + "\nPorta web: " + str(data["web_port"])
+                    + "\nPROVIDER_MODE: " + str(data.get("provider_mode", "disabled"))
                     + ("\n.env anterior preservado com seus segredos."
                        if data.get("env_preserved") else
                        "\n.env novo com credenciais protegidas.")
@@ -411,6 +443,7 @@ class DeployerWindow(tk.Tk):
         tag = self.vars["tag"].get().strip()
         if tag:
             args += ["--tag", tag]
+        args += ["--provider-mode", self.vars["provider_mode"].get()]
         port = self.vars["port"].get().strip()
         if port:
             if not port.isdecimal() or not 40000 <= int(port) <= 49999:
@@ -492,6 +525,17 @@ class DeployerWindow(tk.Tk):
                 "upgrade", *self._directory_args(), *(["--tag", tag] if tag else []),
                 "--yes",
             ])
+
+    def update_provider(self) -> None:
+        mode = self.vars["provider_mode"].get()
+        if messagebox.askyesno(
+            "Confirmar modo da integração CBS",
+            "Aplicar PROVIDER_MODE=" + mode + " ao .env existente, sem alterar "
+            "credenciais e criando um backup? É necessário recriar os serviços "
+            "do Compose para aplicar a alteração.",
+            icon="warning",
+        ):
+            self._run(["provider-update", *self._directory_args(), "--mode", mode, "--yes"])
 
     def rollback(self) -> None:
         tag = self.vars["rollback_tag"].get().strip()
