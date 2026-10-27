@@ -223,7 +223,9 @@ class FiscalDocument(Base):
     signature_present: Mapped[bool] = mapped_column(Boolean)
     authorization_status: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
-\nclass TaxCalculation(Base):
+
+
+class TaxCalculation(Base):
     """Immutable result from the installed fiscal calculation engine."""
 
     __tablename__ = "tax_calculations"
