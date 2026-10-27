@@ -1,7 +1,6 @@
-"""Operational command center inspired by the attached shell's workflow.
+"""Operational dashboard from persisted evidence, scoped to one company.
 
-Uses the existing multi-company tenant boundary. Read-only summaries and query
-history are projections of persisted evidence, not a separate RFB state machine.
+History and counts do not imply completion of an official assessment.
 """
 from __future__ import annotations
 
