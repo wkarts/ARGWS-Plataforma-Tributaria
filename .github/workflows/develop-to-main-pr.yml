@@ -1,0 +1,75 @@
+name: Create develop-to-main promotion PR
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: fiscal-develop-to-main-promotion
+  cancel-in-progress: false
+
+jobs:
+  promotion-pr:
+    if: github.repository == 'wkarts/ARGWS-Plataforma-Tributaria'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Create or reuse main promotion pull request
+        env:
+          GH_TOKEN: ${{ secrets.PROMOTION_PR_TOKEN || github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          existing="$(gh pr list --repo "$repo" --head develop --base main --state open --json number --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            echo "PR #$existing já existe e acompanhará automaticamente a branch develop."
+            echo "PR existente: https://github.com/$repo/pull/$existing" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          compare="$(gh api "repos/$repo/compare/main...develop")"
+          ahead="$(jq -r '.ahead_by' <<< "$compare")"
+          [[ "$ahead" =~ ^[0-9]+$ ]] || { echo "::error::Comparação de branches inválida"; exit 1; }
+          if (( ahead == 0 )); then
+            echo "Sem novos commits para promover da develop para main."
+            exit 0
+          fi
+
+          source_sha="$(gh api "repos/$repo/git/ref/heads/develop" --jq '.object.sha')"
+          body="$RUNNER_TEMP/promocao-main.md"
+          cat > "$body" <<'EOF'
+          ## Promoção da develop para main
+
+          Esta PR é aberta automaticamente quando a develop recebe novos commits. Ela acompanha a branch de origem, portanto novos merges entram na mesma PR.
+
+          **Origem:** `develop` (o HEAD atualizado aparece na PR).
+
+          ### Condições obrigatórias antes do merge
+          - [ ] CI e compilações aprovados no HEAD atual.
+          - [ ] GHCR e pré-release por SHA publicados e conferidos.
+          - [ ] Versão SemVer nova em `VERSION` (nunca reutilizar uma tag estável).
+          - [ ] Auditoria dos artefatos, migrations e integridade aprovada.
+          - [ ] Revisão e autorização explícita da promoção para main.
+
+          **Sem merge e sem deploy automáticos.**
+          EOF
+          printf '\n**SHA observado:** `%s`.\n' "$source_sha" >> "$body"
+          if gh pr create --repo "$repo" --base main --head develop --draft \
+              --title "release: promover develop para main" --body-file "$body"; then
+            echo "PR de promoção criada." >> "$GITHUB_STEP_SUMMARY"
+          else
+            # Outra execução pode ter criado a mesma PR durante a checagem.
+            existing="$(gh pr list --repo "$repo" --head develop --base main --state open --json number --jq '.[0].number // empty')"
+            if [[ -n "$existing" ]]; then
+              echo "PR #$existing já existe; nenhuma duplicação." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "::error::Sem permissão para criar PR. Habilite Settings > Actions > General > Allow GitHub Actions to create and approve pull requests ou configure o segredo PROMOTION_PR_TOKEN com permissão Pull requests: write."
+            exit 1
+          fi
