@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.models import AuditEvent, Company, TaxCalculation, User
 from app.security import current_user
-from app.tax_calculator import TaxCalculationIn, canonical, digest, execute_calculator
+from app.tax_calculator import TaxCalculationIn, canonical, digest, execute_calculator, calculator_urls
 
 router = APIRouter(prefix="/api/v1", tags=["tax-calculator"])
 
@@ -40,6 +40,24 @@ async def _company(session: AsyncSession, user: User, company_id: str) -> Compan
     if company is None:
         raise HTTPException(404, "Empresa não encontrada")
     return company
+
+
+@router.get("/tax-calculator/status")
+async def calculator_status(
+    response: Response,
+    user: User = Depends(current_user),
+) -> dict:
+    from fastapi import HTTPException as _Unavailable
+
+    result: dict = {}
+    for regime in ("regular", "simples"):
+        try:
+            calculator_urls(regime)
+            result[regime] = {"configured": True}
+        except _Unavailable:
+            result[regime] = {"configured": False}
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.post("/tax-calculations", status_code=201)
