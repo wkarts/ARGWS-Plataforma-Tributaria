@@ -81,14 +81,20 @@ class DeployerTests(unittest.TestCase):
         return deployer.generate(target="docker", channel="production", output=self.output,
                                  admin_email="admin@example.org", owner="wkarts", **options)
 
-    def test_owner_must_be_explicit_in_new_invocation(self) -> None:
+    def test_owner_is_auto_resolved_from_model_without_required_input(self) -> None:
         parser = deployer.make_parser()
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            parser.parse_args(["generate", "--target", "docker", "--channel", "production",
-                               "--output", str(self.output), "--admin-email", "admin@example.org"])
-        self.assertEqual(parser.parse_args(["generate", "--target", "docker", "--channel", "production",
-                                            "--output", str(self.output), "--admin-email", "admin@example.org",
-                                            "--owner", "wkarts"]).owner, "wkarts")
+        command = ["generate", "--target", "docker", "--channel", "production",
+                   "--output", str(self.output), "--admin-email", "admin@example.org"]
+        self.assertIsNone(parser.parse_args(command).owner)
+        self.assertEqual(deployer.defaults("docker", "production")["owner"], "wkarts")
+        self.assertEqual(deployer.defaults("docker", "production")["web_port"], 48080)
+        self.assertEqual(deployer.defaults("docker", "develop")["web_port"], 48081)
+        result = deployer.generate(target="docker", channel="production", output=self.output,
+                                   admin_email="admin@example.org", tag="v0.1.0")
+        self.assertEqual(result["owner"], "wkarts")
+        self.assertEqual(result["web_port"], 48080)
+        self.assertTrue(Path(result["compose_path"]).is_file())
+        self.assertTrue(Path(result["env_path"]).is_file())
 
     def test_generate_uses_version_and_url_credentials_agree(self) -> None:
         result = self.generate()
@@ -109,6 +115,40 @@ class DeployerTests(unittest.TestCase):
         self.assertEqual(deployer.validate_directory(self.output)["tag"], "0.1.0")
         if os.name != "nt":
             self.assertEqual(stat.S_IMODE((self.output / ".env").stat().st_mode), 0o600)
+
+    def test_latest_selects_published_stable_tag_instead_of_mutable_latest(self) -> None:
+        with patch.object(deployer, "load_catalog",
+                          return_value={"latest": "v0.3.1", "versions": ["v0.3.1", "v0.3.0"]}):
+            result = deployer.generate(target="docker", channel="production",
+                                       output=self.output,
+                                       admin_email="admin@example.org", tag="latest")
+        env = deployer.parse_env((self.output / ".env").read_text(encoding="utf-8"))
+        self.assertEqual(result["tag"], "v0.3.1")
+        self.assertEqual(env["APP_TAG"], "v0.3.1")
+        self.assertNotIn("APP_TAG=latest", (self.output / ".env").read_text())
+
+    def test_latest_fails_closed_when_catalog_is_unavailable(self) -> None:
+        from release_catalog import ReleaseCatalogError
+        with patch.object(deployer, "load_catalog",
+                          side_effect=ReleaseCatalogError("Serviço indisponível")):
+            with self.assertRaisesRegex(deployer.DeployerError, "Serviço indisponível"):
+                deployer.generate(target="docker", channel="production",
+                                  output=self.output,
+                                  admin_email="admin@example.org", tag="latest")
+        self.assertFalse((self.output / ".env").exists())
+
+    def test_path_with_spaces_port_override_and_manual_tag(self) -> None:
+        folder = self.output.parent / "Pasta com espaços Windows" / "production"
+        result = deployer.generate(target="docker", channel="production",
+                                   output=folder, owner=None,
+                                   tag="v0.2.0", port=48092,
+                                   admin_email="admin@example.org")
+        data = deployer.validate_directory(folder)
+        self.assertEqual(data["port"], 48092)
+        self.assertEqual(data["tag"], "v0.2.0")
+        self.assertEqual(Path(result["directory"]), folder.resolve())
+        self.assertTrue((folder / "compose.yaml").is_file())
+        self.assertTrue((folder / ".env").is_file())
 
     def test_force_updates_compose_and_preserves_env_byte_for_byte(self) -> None:
         self.generate()
