@@ -32,7 +32,7 @@ def exclusive_lock(path: Path) -> int:
 
 async def serve() -> None:
     settings = get_settings()
-    settings.validate_security()
+    settings.validate_security(require_provider=False)
     if not settings.self_hosted:
         raise RuntimeError("O processador local requer DEPLOYMENT_MODE=self")
     prepare_self_data(settings)
@@ -42,7 +42,7 @@ async def serve() -> None:
     try:
         while True:
             heartbeat.touch(mode=0o600)
-            if settings.provider_mode == "receita":
+            if settings.provider_mode == "receita" and settings.receipt_readiness()["ready"]:
                 current = time.monotonic()
                 if current - last_schedule >= 900:
                     await schedule_due(settings)

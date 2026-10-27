@@ -39,6 +39,8 @@ def authorization_rejection(organization_id: str, base: str, resource: str,
         return None if settings.provider_mode == "fixture" else "Ambiente de teste desabilitado"
     if settings.provider_mode != "receita":
         return "Integração CBS desabilitada"
+    if not settings.receipt_readiness()["ready"]:
+        return "Integração Receita ainda sem credenciais e ambientes completos"
     if organization_id != settings.cbs_credential_organization_id or base not in settings.allowed_bases:
         return "Credencial CBS revogada para organização ou raiz CNPJ"
     if (environment == "restricted" and not settings.cbs_restricted_enabled
@@ -213,6 +215,9 @@ async def process_one(query_id: str) -> None:
 
 
 async def run_tick() -> int:
+    # Do not consume queued official jobs until credentials are reconfigured.
+    if settings.provider_mode == "receita" and not settings.receipt_readiness()["ready"]:
+        return 0
     ids = await due_ids()
     for query_id in ids:
         await process_one(query_id)
