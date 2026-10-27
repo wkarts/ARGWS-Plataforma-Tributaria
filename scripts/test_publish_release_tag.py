@@ -58,7 +58,7 @@ class PreviewTagTests(unittest.TestCase):
             args = sys.argv[1:]
             state = Path(os.environ["GH_MOCK_STATE"])
             target = os.environ["GITHUB_SHA"]
-            tag = "v0.2.0-develop." + target[:12]
+            tag = "v" + os.environ["VERSION"] + "-develop." + target[:12]
             ref = state / "tag.txt"
             events = state / "events.txt"
 
@@ -106,7 +106,7 @@ class PreviewTagTests(unittest.TestCase):
             "GH_TOKEN": "testing-only",
             "GITHUB_REPOSITORY": "wkarts/ARGWS-Plataforma-Tributaria",
             "GITHUB_SHA": SHA,
-            "VERSION": "0.2.0",
+            "VERSION": (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
             "CHANNEL": "develop",
         }
 
