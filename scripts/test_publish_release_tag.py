@@ -68,7 +68,7 @@ class PreviewTagTests(unittest.TestCase):
 
             if args[:1] == ["api"]:
                 if args[1:3] == ["--method", "POST"] and args[3] == "repos/wkarts/ARGWS-Plataforma-Tributaria/git/refs":
-                    fields = dict(part[2:].split("=", 1) for part in args[4:] if part.startswith("-f"))
+                    fields = dict(args[i + 1].split("=", 1) for i in range(4, len(args) - 1) if args[i] == "-f")
                     if fields.get("ref") != "refs/tags/" + tag or fields.get("sha") != target:
                         sys.exit(91)
                     if ref.exists():
