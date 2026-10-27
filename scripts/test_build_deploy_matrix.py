@@ -24,6 +24,7 @@ class BuildDeployMatrixTests(unittest.TestCase):
             with ZipFile(first) as archive:
                 self.assertEqual(set(REQUIRED) - set(archive.namelist()), set())
                 self.assertFalse(any(item.filename.endswith("/.env") for item in archive.infolist()))
+                self.assertEqual(set(archive.namelist()), set(collect().keys()))
                 for target in ("", "docker/", "dockge/", "portainer/", "cloudpanel/"):
                     for channel in ("develop", "production"):
                         root = f"deploy/{target}{channel}/"

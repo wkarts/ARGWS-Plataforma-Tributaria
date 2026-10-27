@@ -12,15 +12,22 @@ import sys
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 ROOT = Path(__file__).resolve().parents[1]
+VARIANT_PATHS = tuple(
+    f"deploy/{target}{channel}/{name}"
+    for target in ("", "docker/", "dockge/", "portainer/", "cloudpanel/")
+    for channel in ("develop", "production")
+    for name in ("compose.yaml", ".env.example")
+)
 ASSET_PATHS = (
     "deploy/compose.yaml", "deploy/env.develop.example",
     "deploy/env.production.example", "deploy/README.md",
-    "deploy/develop", "deploy/production", "deploy/docker",
-    "deploy/dockge", "deploy/portainer", "deploy/cloudpanel",
     "scripts/deploy.sh", "scripts/backup.sh", "scripts/rollback.py",
     "scripts/preflight.py", "scripts/version.py", "scripts/sync_deploy_env.py",
-    "tools/deployer", "docs/CALCULO-TRIBUTARIO-LOCAL.md", "VERSION",
-)
+    "tools/deployer/deployer.py", "tools/deployer/gui.py",
+    "tools/deployer/README.md", "tools/deployer/requirements-build.txt",
+    "docs/CALCULO-TRIBUTARIO-LOCAL.md", "VERSION",
+) + VARIANT_PATHS
+
 EXCLUDED_PARTS = {"secrets", "backups", "volumes", ".git", "__pycache__", ".venv",
                   "node_modules", "dist"}
 EXCLUDED_SUFFIXES = {".db", ".sqlite3", ".pem", ".p12", ".pfx", ".pyc", ".log"}
