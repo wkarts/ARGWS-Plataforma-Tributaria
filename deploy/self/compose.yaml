@@ -47,6 +47,7 @@ services:
   api:
     build: *api-build
     image: ${API_IMAGE:-client-fiscal-api:local}
+    extra_hosts: ["host.docker.internal:host-gateway"]
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers", "--no-access-log", "--workers", "1"]
     environment: *api-environment
     secrets: *api-secrets

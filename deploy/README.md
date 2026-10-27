@@ -25,6 +25,23 @@ O fluxo de main constrói primeiro só `:sha-<12>`, conclui CI e os executáveis
 
 As sete imagens-base (`python`, `node`, `nginx`, `postgres`, `redis`, `rabbitmq`, `objectstore`) constam em `.github/base-images.json`. A automação não reetiqueta uma base publicada; para atualizar o runtime, incremente `rN`, ajuste as referências dependentes e valide a compatibilidade dos dados. Imagens de API e web são publicadas para `linux/amd64` e `linux/arm64`, com SBOM e proveniência. Os pacotes Python ainda usam faixas de dependências no `pyproject.toml`, logo rebuilds de código-fonte não são bit a bit reproduzíveis; a release registra `API-DEPENDENCIES.txt` extraído da imagem publicada e os digests exatos.
 
+## Calculadora tributária em todos os destinos
+
+Os perfis `self`, Docker, Dockge, Portainer e CloudPanel utilizam o mesmo módulo de cálculo por operação. A API **não inclui uma imagem tributária fictícia**: instale a Calculadora normativa em rede interna controlada, verifique sua versão e seus contratos HTTP antes de habilitar o regime. Configure no `.env` da instalação:
+
+```dotenv
+TAX_CALCULATOR_REGULAR_URL=
+TAX_CALCULATOR_REGULAR_VERSION_URL=
+TAX_CALCULATOR_SIMPLES_URL=
+TAX_CALCULATOR_SIMPLES_VERSION_URL=
+```
+
+Cada regime exige a URL de cálculo e a URL de versão, com o mesmo host e porta. Se o motor estiver em contêiner na rede de aplicação, use os nomes de serviço reconhecidos `calculator-regular`, `calculator-simples` ou `tax-calculator`. Se estiver instalado na máquina anfitriã, `host.docker.internal` é resolvido no contêiner `api` pelo mapeamento `host-gateway`; a porta deve ser acessível somente da rede autorizada. O nome `localhost` dentro da API não corresponde ao host. As URLs são acessíveis apenas ao backend e não são expostas no navegador.
+
+Deixar as quatro variáveis vazias desabilita o cálculo, sem interromper os demais módulos. O serviço fiscal local não é baixado ou iniciado automaticamente, e a configuração nunca cria alíquotas ou resultados hipotéticos. Consulte `docs/CALCULO-TRIBUTARIO-LOCAL.md` para a versão do contrato utilizada.
+
+Os modelos oficiais são `deploy/compose.yaml`, `deploy/env.develop.example` e `deploy/env.production.example`. `scripts/generate_deploys.py` propaga alterações aos dez diretórios derivados. O `.env` privado de uma instalação não é alterado pelo gerador. Para acrescentar apenas os novos parâmetros opcionais sem substituir segredos, use `scripts/sync_deploy_env.py` com confirmação explícita. O merge atualiza artefatos de distribuição; **não realiza deploy remoto em servidores de clientes**.
+
 ## Desenvolvimento local sem GHCR
 
 O override local constrói API e web com bases públicas. Requer Docker Engine com Compose, Python 3.13 e Node 22 apenas para desenvolvimento fora dos containers. Gere um `.env` de develop com o deployer e copie o arquivo privado para `deploy/.env`, ou preencha uma cópia de `deploy/env.develop.example` com segredos fortes e e-mail administrativo real. Nunca versione `.env`.
