@@ -119,9 +119,19 @@ if [[ "$CHANNEL" == develop ]]; then
     echo "Tag de prévia diverge do commit validado" >&2; exit 1;
   }
 
-  # Se um draft já contém um asset, ele nunca é substituído em uma repetição.
-  # Um asset diferente ou desconhecido interrompe a publicação.
-  python3 - "$files" "$remote" <<'PY'
+  if [[ "$draft" == true ]]; then
+    # Reexecuções podem reconstruir um draft privado e incompleto.
+    # Só releases publicadas têm assets imutáveis.
+    for old_asset in "$remote"/*; do
+      [[ -f "$old_asset" ]] || continue
+      name="${old_asset##*/}"
+      if [[ ! -f "$files/$name" ]]; then
+        gh release delete-asset "$preview_tag" "$name" --yes --repo "$GITHUB_REPOSITORY"
+      fi
+    done
+    gh release upload "$preview_tag" "$files"/* --clobber --repo "$GITHUB_REPOSITORY"
+  else
+    python3 - "$files" "$remote" <<'PY'
 import hashlib
 from pathlib import Path
 import sys
@@ -133,13 +143,8 @@ if unknown := remote.keys() - local.keys():
     raise SystemExit(f"Assets remotos inesperados: {sorted(unknown)}")
 for name, path in remote.items():
     if hashlib.sha256(path.read_bytes()).digest() != hashlib.sha256(local[name].read_bytes()).digest():
-        raise SystemExit(f"Checksum divergente na prévia: {name}")
+        raise SystemExit(f"Pré-release publicada divergente do commit: {name}")
 PY
-  if [[ "$draft" == true ]]; then
-    for path in "$files"/*; do
-      name="${path##*/}"
-      [[ -f "$remote/$name" ]] || gh release upload "$preview_tag" "$path" --repo "$GITHUB_REPOSITORY"
-    done
   fi
 
   gh release download "$preview_tag" --dir "$verified" --repo "$GITHUB_REPOSITORY"
