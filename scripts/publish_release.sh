@@ -86,70 +86,89 @@ promote() {
 }
 
 if [[ "$CHANNEL" == develop ]]; then
-  # Nunca deslocar as tags móveis por um workflow antigo ainda na fila.
-  head_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/develop" --jq '.object.sha')"
-  if [[ "$head_sha" != "$GITHUB_SHA" ]]; then
-    echo "Develop avançou para $head_sha; build $GITHUB_SHA não será promovido."
-    exit 0
-  fi
-
-  # A release móvel fica privada durante a troca dos arquivos. Em falha, o retry
-  # recomeça sobre o mesmo draft sem anunciar binários e checksums misturados.
-  if release_exists pre-release; then
-    gh release edit pre-release --draft=true --prerelease --latest=false
+  # Cada commit recebe uma release imutável, sem substituir a anterior.
+  # A tag móvel GHCR :develop só é atualizada pelo HEAD corrente.
+  preview_tag="v${VERSION}-develop.${GITHUB_SHA::12}"
+  if current="$(ref_sha "$preview_tag")"; then
+    [[ "$current" == "$GITHUB_SHA" ]] || { echo "Tag de prévia já pertence a outro commit." >&2; exit 1; }
   else
     status=$?
     [[ "$status" -eq 1 ]] || exit "$status"
-    gh release create pre-release --target "$GITHUB_SHA" --title "Prévia $VERSION" \
-      --notes "Versão de prévia do commit $GITHUB_SHA. Confira os checksums dos pacotes." --prerelease --draft --latest=false
   fi
-  # A prévia é móvel; versões anteriores podem ter assets com outros nomes.
-  # Limpe-os enquanto a release ainda está em draft, antes do novo manifesto.
-  remote_assets="$(gh release view pre-release --json assets --jq '.assets[].name' --repo "$GITHUB_REPOSITORY")"
-  while IFS= read -r old_asset; do
-    [[ -n "$old_asset" ]] || continue
-    if [[ ! -f "$files/$old_asset" ]]; then
-      gh release delete-asset pre-release "$old_asset" --yes --repo "$GITHUB_REPOSITORY"
-    fi
-  done <<< "$remote_assets"
-  gh release upload pre-release "$files"/* --clobber
 
+  remote="$(mktemp -d)"
   verified="$(mktemp -d)"
-  trap 'rm -rf "$verified"' EXIT
-  gh release download pre-release --dir "$verified"
-  python3 - "$files" "$verified" <<'PY'
-import pathlib
+  trap 'rm -rf "$remote" "$verified"' EXIT
+
+  if release_exists "$preview_tag"; then
+    draft="$(gh release view "$preview_tag" --json isDraft --jq '.isDraft' --repo "$GITHUB_REPOSITORY")"
+    count="$(gh release view "$preview_tag" --json assets --jq '.assets | length' --repo "$GITHUB_REPOSITORY")"
+    if (( count > 0 )); then
+      gh release download "$preview_tag" --dir "$remote" --repo "$GITHUB_REPOSITORY"
+    fi
+  else
+    status=$?
+    [[ "$status" -eq 1 ]] || exit "$status"
+    gh release create "$preview_tag" --target "$GITHUB_SHA" --draft --prerelease --latest=false \
+      --title "Prévia $VERSION (${GITHUB_SHA::12})" \
+      --notes "Build do commit $GITHUB_SHA. Artefatos conferidos por SHA256SUMS.txt e digests de IMAGES.txt." \
+      --repo "$GITHUB_REPOSITORY"
+    draft=true
+  fi
+  [[ "$(ref_sha "$preview_tag")" == "$GITHUB_SHA" ]] || {
+    echo "Tag de prévia diverge do commit validado" >&2; exit 1;
+  }
+
+  # Se um draft já contém um asset, ele nunca é substituído em uma repetição.
+  # Um asset diferente ou desconhecido interrompe a publicação.
+  python3 - "$files" "$remote" <<'PY'
+import hashlib
+from pathlib import Path
 import sys
 
-expected, actual = ({p.name for p in pathlib.Path(arg).iterdir() if p.is_file()} for arg in sys.argv[1:])
+expected, present = (Path(p) for p in sys.argv[1:])
+local = {p.name: p for p in expected.iterdir() if p.is_file()}
+remote = {p.name: p for p in present.iterdir() if p.is_file()}
+if unknown := remote.keys() - local.keys():
+    raise SystemExit(f"Assets remotos inesperados: {sorted(unknown)}")
+for name, path in remote.items():
+    if hashlib.sha256(path.read_bytes()).digest() != hashlib.sha256(local[name].read_bytes()).digest():
+        raise SystemExit(f"Checksum divergente na prévia: {name}")
+PY
+  if [[ "$draft" == true ]]; then
+    for path in "$files"/*; do
+      name="${path##*/}"
+      [[ -f "$remote/$name" ]] || gh release upload "$preview_tag" "$path" --repo "$GITHUB_REPOSITORY"
+    done
+  fi
+
+  gh release download "$preview_tag" --dir "$verified" --repo "$GITHUB_REPOSITORY"
+  python3 - "$files" "$verified" <<'PY'
+from pathlib import Path
+import sys
+
+expected, actual = ({p.name for p in Path(arg).iterdir() if p.is_file()} for arg in sys.argv[1:])
 if expected != actual:
-    raise SystemExit(f'Assets da pre-release faltantes ou extras: {sorted(expected ^ actual)}')
+    raise SystemExit(f"Assets faltantes ou extras: {sorted(expected ^ actual)}")
 PY
   cmp "$files/SHA256SUMS.txt" "$verified/SHA256SUMS.txt"
   (cd "$verified" && sha256sum -c SHA256SUMS.txt)
 
+  if [[ "$draft" == true ]]; then
+    gh release edit "$preview_tag" --prerelease --draft=false --latest=false --repo "$GITHUB_REPOSITORY"
+  fi
+
   head_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/develop" --jq '.object.sha')"
-  if [[ "$head_sha" != "$GITHUB_SHA" ]]; then
-    echo "Develop avançou para $head_sha durante a validação; build antigo fica em draft."
-    exit 0
-  fi
-  for ref in "${image_refs[@]}"; do
-    image="${ref%@*}"
-    docker buildx imagetools create -t "$image:develop" "$ref"
-    [[ "$(image_digest "$image:develop")" == "${ref#*@}" ]]
-  done
-  if ref_sha pre-release >/dev/null; then
-    gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/pre-release" \
-      -f sha="$GITHUB_SHA" -F force=true >/dev/null
+  if [[ "$head_sha" == "$GITHUB_SHA" ]]; then
+    for ref in "${image_refs[@]}"; do
+      image="${ref%@*}"
+      docker buildx imagetools create -t "$image:develop" "$ref"
+      [[ "$(image_digest "$image:develop")" == "${ref#*@}" ]] || exit 1
+    done
   else
-    status=$?
-    [[ "$status" -eq 1 ]] || exit "$status"
-    gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
-      -f ref=refs/tags/pre-release -f sha="$GITHUB_SHA" >/dev/null
+    echo "Commit $GITHUB_SHA publicado com tag imutável; HEAD develop atual é $head_sha. Tag móvel preservada."
   fi
-  [[ "$(ref_sha pre-release)" == "$GITHUB_SHA" ]]
-  gh release edit pre-release --title "Prévia $VERSION" --notes "Versão de prévia do commit $GITHUB_SHA. Confira os checksums dos pacotes." \
-    --prerelease --draft=false --latest=false
+  echo "Pré-release $preview_tag publicada e verificada."
   exit 0
 fi
 
