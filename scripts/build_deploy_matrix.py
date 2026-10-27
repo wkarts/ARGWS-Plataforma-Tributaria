@@ -24,6 +24,7 @@ ASSET_PATHS = (
     "scripts/deploy.sh", "scripts/backup.sh", "scripts/rollback.py",
     "scripts/preflight.py", "scripts/version.py", "scripts/sync_deploy_env.py",
     "tools/deployer/deployer.py", "tools/deployer/gui.py",
+    "tools/deployer/release_catalog.py",
     "tools/deployer/README.md", "tools/deployer/requirements-build.txt",
     "docs/CALCULO-TRIBUTARIO-LOCAL.md", "VERSION",
 ) + VARIANT_PATHS
@@ -37,6 +38,7 @@ REQUIRED = {
     "scripts/deploy.sh", "scripts/backup.sh", "scripts/rollback.py",
     "scripts/preflight.py", "scripts/version.py", "scripts/sync_deploy_env.py",
     "tools/deployer/deployer.py", "tools/deployer/gui.py",
+    "tools/deployer/release_catalog.py",
     "docs/CALCULO-TRIBUTARIO-LOCAL.md", "VERSION",
 }
 for _target in ("", "docker/", "dockge/", "portainer/", "cloudpanel/"):
