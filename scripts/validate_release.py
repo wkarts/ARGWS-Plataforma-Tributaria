@@ -68,6 +68,9 @@ assert 'cancel-in-progress: false' in workflow
 assert 'v${VERSION}-develop.${GITHUB_SHA::12}' in publisher
 assert 'gh release edit "$preview_tag" --prerelease --draft=false' in publisher
 assert 'gh release download "$preview_tag" --dir "$verified"' in publisher
+assert 'gh release upload pre-release "$files"/* --clobber' in publisher
+assert publisher.index('gh release edit "$preview_tag" --prerelease --draft=false') < publisher.index('gh release upload pre-release "$files"/* --clobber')
+assert 'python3 scripts/build_deploy_matrix.py --output' in workflow
 assert 'cp release-collector-linux/fiscal-xml-collector-linux-amd64' not in workflow
 assert 'cp release-collector-windows/fiscal-xml-collector-windows-amd64.exe' not in workflow
 for name in ('fiscal-xml-gui-linux-x64', 'fiscal-xml-worker-linux-x64',
