@@ -27,24 +27,33 @@ MARKERS = {
 }
 
 
+# Machine-readable source files can legitimately reference a development channel
+# or the generic tax-reform domain. Fixed vendor identities are not permitted.
+SOURCE_MARKERS = {
+    "identidade comercial fixa no código": re.compile(r"argws|wkarts|pige360|fersoft"),
+}
+TECHNICAL_SOURCE_SUFFIXES = {".py", ".sh", ".ps1"}
+
+
 def normalized(value: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", value.casefold())
                    if not unicodedata.combining(c))
 
 
-def markers(value: str) -> list[str]:
+def markers(value: str, *, technical_source: bool = False) -> list[str]:
     value = normalized(value)
-    return [name for name, pattern in MARKERS.items() if pattern.search(value)]
+    marker_set = SOURCE_MARKERS if technical_source else MARKERS
+    return [name for name, pattern in marker_set.items() if pattern.search(value)]
 
 
-def inspect_text(path: Path, display: str) -> list[str]:
+def inspect_text(path: Path, display: str, *, technical_source: bool = False) -> list[str]:
     try:
         if path.stat().st_size > MAX_TEXT_BYTES:
             return [f"{display}: arquivo de texto excede {MAX_TEXT_BYTES} bytes"]
         content = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         return [f"{display}: leitura inválida ({type(exc).__name__})"]
-    return [f"{display}: {marker}" for marker in markers(content)]
+    return [f"{display}: {marker}" for marker in markers(content, technical_source=technical_source)]
 
 
 def inspect_tree(root: Path, *, web: bool = False) -> list[str]:
@@ -62,9 +71,10 @@ def inspect_tree(root: Path, *, web: bool = False) -> list[str]:
         if not item.is_file():
             continue
         display = str(item.relative_to(root))
-        errors.extend(f"{display}: {marker}" for marker in markers(display))
+        technical_source = item.suffix.lower() in TECHNICAL_SOURCE_SUFFIXES
+        errors.extend(f"{display}: {marker}" for marker in markers(display, technical_source=technical_source))
         if item.suffix.lower() in TEXT_SUFFIXES or item.name.startswith(".env"):
-            errors.extend(inspect_text(item, display))
+            errors.extend(inspect_text(item, display, technical_source=technical_source))
     return errors
 
 
@@ -85,8 +95,9 @@ def inspect_release_names(directory: Path) -> list[str]:
                     for member in archive.infolist():
                         if member.is_dir():
                             continue
+                        technical_source = Path(member.filename).suffix.lower() in TECHNICAL_SOURCE_SUFFIXES
                         errors.extend(f"{item.name}/{member.filename}: {marker}"
-                                      for marker in markers(member.filename))
+                                      for marker in markers(member.filename, technical_source=technical_source))
                         if member.file_size > MAX_TEXT_BYTES:
                             continue
                         suffix = Path(member.filename).suffix.lower()
@@ -97,7 +108,7 @@ def inspect_release_names(directory: Path) -> list[str]:
                                 errors.append(f"{item.name}/{member.filename}: leitura inválida")
                                 continue
                             errors.extend(f"{item.name}/{member.filename}: {marker}"
-                                          for marker in markers(content))
+                                          for marker in markers(content, technical_source=technical_source))
             except (OSError, zipfile.BadZipFile):
                 errors.append(f"{item.name}: ZIP inválido")
     return errors

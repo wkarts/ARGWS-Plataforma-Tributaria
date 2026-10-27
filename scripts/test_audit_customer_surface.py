@@ -66,5 +66,30 @@ class CustomerSurfaceAuditTests(unittest.TestCase):
         self.assertEqual(audit(self.web, self.self_dir, self.release), [])
 
 
+    def test_technical_source_in_self_archive_can_mention_channel_and_fiscal_subject(self) -> None:
+        archive = self.release / "Fiscal-Self-Deploy-preview.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("apps/api/app/central_reforma_api.py",
+                            "router_tag = 'central-reforma'\n")
+            output.writestr("scripts/sync_deploy_env.py",
+                            "CHANNELS = ('develop', 'production', 'self')\n")
+        self.assertEqual(audit(self.web, self.self_dir, self.release), [])
+
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("apps/api/app/fiscal_operations_api.py",
+                            "BRANDING_OWNER = 'wkarts'\n")
+        self.assertTrue(any("identidade comercial fixa" in issue
+                            for issue in audit(self.web, self.self_dir, self.release)))
+
+    def test_backend_source_does_not_exempt_env_or_visible_frontend(self) -> None:
+        archive = self.release / "Fiscal-Self-Deploy-preview.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("apps/api/.env.example", "POSTGRES_USER=reforma\n")
+            output.writestr("apps/web/src/theme.ts", "export const product = 'ARGWS';\n")
+        issues = audit(self.web, self.self_dir, self.release)
+        self.assertTrue(any("apps/api/.env.example" in issue for issue in issues))
+        self.assertTrue(any("apps/web/src/theme.ts" in issue for issue in issues))
+
+
 if __name__ == "__main__":
     unittest.main()
