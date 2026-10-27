@@ -275,15 +275,7 @@ jobs:
             -x '*/.env' '*/secrets/*' '*/backups/*' '*/volumes/*' \
                '*/node_modules/*' '*/dist/*' '*/.venv/*' '*/__pycache__/*' \
                '*/*.egg-info/*' '*.pyc' '*.sqlite3' '*.db' '*.pem' '*.p12' '*.pfx' '*.log'
-          zip -q -r "release-files/Fiscal-Deploy-Matrix-$label.zip" \
-            deploy/compose.yaml deploy/env.develop.example deploy/env.production.example \
-            deploy/develop deploy/production deploy/docker deploy/dockge deploy/portainer deploy/cloudpanel \
-            deploy/README.md scripts/deploy.sh scripts/backup.sh scripts/rollback.py \
-            scripts/preflight.py scripts/version.py scripts/sync_deploy_env.py \
-            tools/deployer docs/CALCULO-TRIBUTARIO-LOCAL.md VERSION \
-            -x '*/.env' '*/secrets/*' '*/backups/*' '*/volumes/*' \
-               '*/node_modules/*' '*/dist/*' '*/.venv/*' '*/__pycache__/*' \
-               '*.pyc' '*.sqlite3' '*.db' '*.pem' '*.p12' '*.pfx' '*.log'
+          python3 scripts/build_deploy_matrix.py --output "release-files/Fiscal-Deploy-Matrix-$label.zip"
           python3 - <<'PY'
           import zipfile
           from pathlib import Path
