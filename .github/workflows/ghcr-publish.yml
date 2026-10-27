@@ -266,8 +266,8 @@ jobs:
           cp tools/collector/systemd/README-self.md release-files/README-XML-Collector-Linux.md
           cp tools/collector/windows/README-installer.md release-files/README-XML-Collector-Windows.md
           cp docs/CONTRATOS-OFICIAIS-2026.md release-files/CONTRATOS-OFICIAIS-2026.md
-          if find deploy -type f -name '.env' -print -quit | grep -q .; then
-            echo 'Private .env in source; refusing release' >&2; exit 1
+          if find deploy apps -type f -name '.env*' ! -name '.env.example' -print -quit | grep -q .; then
+            echo 'Private dotenv in source; refusing release' >&2; exit 1
           fi
           label="$VERSION"
           [[ "$CHANNEL" == develop ]] && label=preview
