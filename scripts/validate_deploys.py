@@ -16,23 +16,26 @@ from version import read_version
 
 
 def redis_startup_contract(compose: str) -> list[str]:
-    """Prevent a Compose string command from being split into shell arguments."""
-    errors: list[str] = []
-    segment = re.search(r"(?ms)^  redis:\\n(.*?)(?=^  [a-z][a-z0-9_-]*:\\n|\\Z)", compose)
-    if segment is None:
+    """Require one shell script argument so Compose cannot truncate Redis startup."""
+    match = re.search(
+        r"(?ms)^  redis:\n(.*?)(?=^  [a-z][a-z0-9_-]*:\n|\Z)",
+        compose,
+    )
+    if match is None:
         return ["Serviço Redis ausente no Compose"]
-    redis = segment.group(1)
+    redis = match.group(1)
+    errors: list[str] = []
     if '    entrypoint: ["/bin/sh", "-ec"]' not in redis:
-        errors.append("Redis deve executar script com entrypoint /bin/sh -ec")
-    if "    command:\\n      - |\\n" not in redis:
-        errors.append("Redis command deve ser uma lista com script multilinha único, não uma string")
-    for clause in (
-        "        umask 077\\n",
-        "        printf 'requirepass %s\\\\n' \"$REDIS_PASSWORD\" > /tmp/redis.conf\\n",
-        "        exec redis-server /tmp/redis.conf --appendonly yes\\n",
-    ):
-        if clause not in redis:
-            errors.append("Redis sem instrução obrigatória: " + clause.strip().split(" ", 1)[0])
+        errors.append("Redis sem entrypoint /bin/sh -ec")
+    if "    command:\n      - |\n" not in redis:
+        errors.append("Redis command precisa ser lista com exatamente um script")
+    required = (
+        "        umask 077\n",
+        "        printf 'requirepass %s\\n' \"$$REDIS_PASSWORD\" > /tmp/redis.conf\n",
+        "        exec redis-server /tmp/redis.conf --appendonly yes\n",
+    )
+    if any(text not in redis for text in required):
+        errors.append("Script Redis está incompleto ou perdeu escape do REDIS_PASSWORD")
     return errors
 
 

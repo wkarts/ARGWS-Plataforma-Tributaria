@@ -153,7 +153,7 @@ services:
     command:
       - |
         umask 077
-        printf 'requirepass %s\n' "$REDIS_PASSWORD" > /tmp/redis.conf
+        printf 'requirepass %s\n' "$$REDIS_PASSWORD" > /tmp/redis.conf
         exec redis-server /tmp/redis.conf --appendonly yes
     volumes: ["redis_data:/data"]
     restart: unless-stopped
