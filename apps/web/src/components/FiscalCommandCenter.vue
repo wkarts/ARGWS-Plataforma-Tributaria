@@ -80,7 +80,7 @@ onBeforeUnmount(() => { ++generation; });
 
     <div v-if="loading" class="surface panel">Atualizando indicadores e histórico...</div>
     <template v-else-if="summary">
-      <div class="reforma-indicators">
+      <div class="taxcenter-indicators">
         <div class="surface panel"><span>XMLs armazenados</span><strong>{{ summary.counts.documents }}</strong></div>
         <div class="surface panel"><span>Registros fiscais</span><strong>{{ summary.counts.records }}</strong></div>
         <div class="surface panel"><span>Consultas em andamento</span><strong>{{ summary.counts.active }}</strong></div>
@@ -92,7 +92,7 @@ onBeforeUnmount(() => { ++generation; });
           <div><div class="eyebrow">AUDITORIA OPERACIONAL</div><h2>Histórico de consultas da empresa</h2></div>
           <button type="button" class="btn secondary" @click="emit('openQueries')">Abrir consultas CBS</button>
         </div>
-        <div class="reforma-toolbar">
+        <div class="taxcenter-toolbar">
           <label for="central-environment">Ambiente</label>
           <select id="central-environment" v-model="environment">
             <option value="">Todos</option><option value="production">Produção</option>
@@ -108,8 +108,8 @@ onBeforeUnmount(() => { ++generation; });
               <tr v-for="query in history" :key="query.id">
                 <td>{{ formatDate(query.created_at) }}</td><td>{{ query.resource }}</td>
                 <td>{{ query.environment }}</td><td>{{ statusLabel(query.status) }}</td>
-                <td class="reforma-break">{{ query.ticket || "—" }}</td>
-                <td class="reforma-break">
+                <td class="taxcenter-break">{{ query.ticket || "—" }}</td>
+                <td class="taxcenter-break">
                   <code v-if="query.received_sha256" :title="query.received_sha256">{{ query.received_sha256 }}</code>
                   <span v-else>Sem retorno bruto persistido</span>
                 </td>
@@ -129,13 +129,13 @@ onBeforeUnmount(() => { ++generation; });
 </template>
 
 <style scoped>
-.reforma-indicators{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
-.reforma-indicators .panel{min-width:0;display:grid;gap:10px;padding:18px}
-.reforma-indicators span{color:#61768b;font-size:.79rem}
-.reforma-indicators strong{color:#183f5b;font-size:1.8rem}
-.reforma-toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:14px 0}
-.reforma-toolbar label{font-weight:700;color:#344961}
-.reforma-toolbar select{border:1px solid #dbe4ee;border-radius:8px;padding:10px;color:#29435c;background:#fff}
-.reforma-break{max-width:250px;overflow-wrap:anywhere}
-.reforma-break code{font-size:.72rem}
+.taxcenter-indicators{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
+.taxcenter-indicators .panel{min-width:0;display:grid;gap:10px;padding:18px}
+.taxcenter-indicators span{color:#61768b;font-size:.79rem}
+.taxcenter-indicators strong{color:#183f5b;font-size:1.8rem}
+.taxcenter-toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:14px 0}
+.taxcenter-toolbar label{font-weight:700;color:#344961}
+.taxcenter-toolbar select{border:1px solid #dbe4ee;border-radius:8px;padding:10px;color:#29435c;background:#fff}
+.taxcenter-break{max-width:250px;overflow-wrap:anywhere}
+.taxcenter-break code{font-size:.72rem}
 </style>
