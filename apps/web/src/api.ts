@@ -17,6 +17,10 @@ import type {
   Resource,
   StockCreditClaim,
   User,
+  CentralSummary,
+  CentralHistory,
+  ReformSimulation,
+  ReformSimulationInput,
 } from "./types.ts";
 
 declare global {
@@ -277,6 +281,25 @@ export class ApiClient {
         amount,
         paid_at: paidAt,
       }),
+    });
+  }
+
+  centralSummary(companyId: string) {
+    const params = new URLSearchParams({ company_id: companyId });
+    return this.request<CentralSummary>(`/central/summary?${params.toString()}`);
+  }
+
+  centralHistory(companyId: string, cursor?: string, environment?: Environment) {
+    const params = new URLSearchParams({ company_id: companyId });
+    if (cursor) params.set("cursor", cursor);
+    if (environment) params.set("environment", environment);
+    return this.request<CentralHistory>(`/central/history?${params.toString()}`);
+  }
+
+  simulateReform(payload: ReformSimulationInput) {
+    return this.request<ReformSimulation>("/simulations", {
+      method: "POST",
+      body: JSON.stringify(payload),
     });
   }
 
