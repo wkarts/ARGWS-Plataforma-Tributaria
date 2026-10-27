@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     cbs_auto_sync_enabled: bool = False
     cbs_auto_sync_environment: str = "restricted"
     cbs_auto_sync_resources: str = "debitos,creditos"
+    tax_calculator_regular_url: str = ""
+    tax_calculator_regular_version_url: str = ""
+    tax_calculator_simples_url: str = ""
+    tax_calculator_simples_version_url: str = ""
 
     @model_validator(mode="after")
     def resolve_secret_files(self) -> "Settings":
