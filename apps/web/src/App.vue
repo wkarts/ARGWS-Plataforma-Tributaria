@@ -89,7 +89,7 @@ const view = ref<View>("overview");
 const creditView = ref<CreditView>("government_reported");
 const movementResource = ref<Resource>("debitos");
 const resource = ref<Resource>("creditos");
-const environment = ref<Environment>("fixture");
+const environment = ref<Environment>("production");
 const loginBusy = ref(false);
 const loading = ref(false);
 const booting = ref(Boolean(token.value));
@@ -169,6 +169,13 @@ const currentPageTitle = computed(
 const fixtureMode = computed(
   () => capabilities.value?.provider_mode === "fixture",
 );
+const officialPending = computed(
+  () => capabilities.value?.provider_mode === "receita" &&
+    capabilities.value?.official_configuration?.ready === false,
+);
+const officialDisabled = computed(
+  () => capabilities.value?.provider_mode === "disabled",
+);
 const queryReason = computed(() => {
   if (!capabilities.value) return "Aguardando capacidades da API.";
   if (!capabilities.value.environments.includes(environment.value))
@@ -234,7 +241,7 @@ async function bootstrap() {
     capabilities.value = cap;
     companies.value = response.items;
     if (!cap.environments.includes(environment.value))
-      environment.value = cap.environments[0] || "fixture";
+      environment.value = cap.environments[0] || "production";
     const remembered = sessionStorage.getItem("company_id");
     companyId.value =
       companies.value.find((item) => item.id === remembered)?.id ||
@@ -753,6 +760,21 @@ onBeforeUnmount(() => {
               >Sem conexão. A interface pode abrir em modo instalado, mas
               consultas e dados fiscais exigem acesso à API.</span
             >
+          </div>
+          <div v-if="officialPending" class="notice warning">
+            <AppIcon name="warning" /><span>
+              <strong>Integração Receita pendente:</strong>
+              {{ capabilities?.official_configuration?.reason ||
+                 "Configure as credenciais oficiais e habilite o ambiente correto." }}
+              Cadastros, XMLs e consultas locais continuam disponíveis.
+            </span>
+          </div>
+          <div v-if="officialDisabled" class="notice warning">
+            <AppIcon name="info" /><span>
+              <strong>Consultas CBS oficiais desabilitadas.</strong>
+              Para habilitar a Receita, configure credenciais e ambiente oficial
+              na instalação. Os recursos locais permanecem disponíveis.
+            </span>
           </div>
           <div v-if="fixtureMode" class="notice fixture">
             <AppIcon name="info" /><span
