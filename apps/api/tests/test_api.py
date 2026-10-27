@@ -196,6 +196,12 @@ def test_incomplete_receita_keeps_companies_and_login_available_without_mock(cli
 
     monkeypatch.setattr(bootstrap_module, "Session", factory)
     monkeypatch.setattr(BlobStore, "ensure_bucket", fake_bucket)
+
+    async def fake_throttle(username, session):
+        return None
+
+    from app import main as main_module
+    monkeypatch.setattr(main_module, "throttle_login", fake_throttle)
     asyncio.run(bootstrap_module.bootstrap())
     signed_in = client.post("/api/v1/auth/login", json={
         "username": "new-admin@example.test", "password": "VeryStrong-password-2026",
