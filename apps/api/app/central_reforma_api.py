@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.models import Company, FiscalDocument, Query, Record, User
 from app.security import current_user
-from app.simulation import SimulationIn, calculate_simulation
 
 router = APIRouter(prefix="/api/v1", tags=["central-reforma"])
 
@@ -131,13 +130,3 @@ async def central_history(
     }
 
 
-@router.post("/simulations")
-async def simulate(
-    data: SimulationIn,
-    response: Response,
-    user: User = Depends(current_user),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    await owned_company(session, user, str(data.company_id))
-    response.headers["Cache-Control"] = "no-store"
-    return calculate_simulation(data)
