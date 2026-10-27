@@ -98,7 +98,81 @@ jobs:
         run: |
           alembic upgrade head
           alembic check
-  frontend:
+      - name: Smoke Receita-mode bootstrap with incomplete CBS against PostgreSQL and RustFS
+        working-directory: apps/api
+        timeout-minutes: 5
+        env:
+          APP_ENV: production
+          DEPLOYMENT_MODE: central
+          PROVIDER_MODE: receita
+          BOOTSTRAP_ADMIN_EMAIL: admin@example.invalid
+          BOOTSTRAP_ADMIN_PASSWORD: CIbootstrap-password-only-2026
+          SECRET_KEY: CI-test-only-application-signing-key-2026-0001
+          S3_ENDPOINT: 127.0.0.1:19000
+          S3_ACCESS_KEY: CIACCESS2026
+          S3_SECRET_KEY: CItemporary-rustfs-secret-key-2026
+          S3_BUCKET: fiscal-evidence
+          S3_REGION: us-east-1
+          S3_USE_SSL: 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          container="fiscal-bootstrap-rustfs-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          docker run -d --name "$container" -p 127.0.0.1:19000:9000 \
+            -e RUSTFS_ACCESS_KEY="$S3_ACCESS_KEY" \
+            -e RUSTFS_SECRET_KEY="$S3_SECRET_KEY" \
+            -e RUSTFS_ADDRESS=:9000 \
+            -e RUSTFS_CONSOLE_ENABLE=false \
+            rustfs/rustfs:1.0.1 /data >/dev/null
+          ready=false
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:19000/health/ready >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$ready" != true ]]; then
+            echo "::error::RustFS S3 não passou na verificação de readiness"
+            docker logs "$container" --tail 40 || true
+            exit 1
+          fi
+          # With PROVIDER_MODE=receita but no official CBS credentials,
+          # bootstrap MUST succeed, while the official provider stays blocked.
+          python - <<'PY'
+          from app.config import get_settings
+          settings = get_settings()
+          settings.validate_security(require_provider=False)
+          assert settings.receipt_readiness()["ready"] is False
+          PY
+          python -m app.bootstrap
+          # A repeated deployment must never create a second administrator.
+          python -m app.bootstrap
+          python - <<'PY'
+          import boto3
+          import os
+          import psycopg
+          from botocore.config import Config
+
+          store = boto3.client(
+              "s3", endpoint_url="http://" + os.environ["S3_ENDPOINT"],
+              aws_access_key_id=os.environ["S3_ACCESS_KEY"],
+              aws_secret_access_key=os.environ["S3_SECRET_KEY"],
+              region_name=os.environ["S3_REGION"],
+              config=Config(s3={"addressing_style": "path"}),
+          )
+          store.head_bucket(Bucket=os.environ["S3_BUCKET"])
+          with psycopg.connect(
+              host=os.environ["POSTGRES_HOST"], dbname=os.environ["POSTGRES_DB"],
+              user=os.environ["POSTGRES_USER"], password=os.environ["POSTGRES_PASSWORD"]
+          ) as db:
+              with db.cursor() as cursor:
+                  cursor.execute("SELECT count(*) FROM users WHERE username = %s",
+                                 (os.environ["BOOTSTRAP_ADMIN_EMAIL"],))
+                  assert cursor.fetchone()[0] == 1, "Administrador duplicado/ausente"
+          print("OK: bootstrap idempotente PostgreSQL + RustFS e bucket S3 válido")
+          PY  frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
