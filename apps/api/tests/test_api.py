@@ -126,6 +126,8 @@ def test_worker_fixture_opens_polls_stores_and_projects(clients, monkeypatch):
 
     client, a, _, company, _, _, session_factory = clients
     monkeypatch.setattr(worker, "Session", session_factory)
+    # Preserve the fixture-only worker mode used by this isolated integration test.
+    monkeypatch.setattr(worker, "settings", get_settings())
 
     async def fake_bucket(self):
         return None
