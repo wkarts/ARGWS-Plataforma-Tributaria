@@ -27,6 +27,7 @@ from app.reconciliation_api import router as reconciliation_router
 from app.finance_controls import router as finance_controls_router
 from app.branding import router as branding_router
 from app.central_reforma_api import router as central_reforma_router
+from app.tax_calculator_api import router as tax_calculator_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -41,6 +42,7 @@ app.include_router(reconciliation_router)
 app.include_router(finance_controls_router)
 app.include_router(branding_router)
 app.include_router(central_reforma_router)
+app.include_router(tax_calculator_router)
 
 
 def capabilities() -> dict:
