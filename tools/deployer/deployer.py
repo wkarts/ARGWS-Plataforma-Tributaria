@@ -21,6 +21,9 @@ from pathlib import Path
 from urllib.parse import quote
 
 from release_catalog import ReleaseCatalogError, load_catalog
+from integrations import (ConfigurationError, append_or_replace_env, dotenv_literal,
+                          dotenv_unquote, normalize_updates, read_config_stdin,
+                          status as integration_status, validate as validate_integrations)
 
 
 TARGETS = ("docker", "dockge", "portainer", "cloudpanel")
@@ -143,10 +146,7 @@ def parse_env(content: str) -> dict[str, str]:
         key = key.strip()
         if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", key) or key in values:
             raise DeployerError("O arquivo .env contém uma chave inválida ou repetida.")
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-        values[key] = value
+        values[key] = dotenv_unquote(value.strip())
     return values
 
 
@@ -165,12 +165,7 @@ def render_env(template: str, values: dict[str, str]) -> str:
             raise DeployerError("Modelo .env.example contém chaves repetidas.")
         seen.add(key)
         if key in values:
-            value = values[key]
-            if "\n" in value or "\r" in value or "\x00" in value:
-                raise DeployerError("Valor de ambiente contém caractere de controle.")
-            if re.search(r"[\s#$'\"\\]", value):
-                raise DeployerError(f"{key} precisa conter um valor seguro para Compose dotenv.")
-            lines.append(f"{key}={value}")
+            lines.append(f"{key}={dotenv_literal(values[key])}")
         else:
             lines.append(line)
     return "\n".join(lines).rstrip() + "\n"
@@ -299,7 +294,8 @@ def ensure_directory(directory: Path) -> None:
 def generate(*, target: str, channel: str, output: Path, owner: str | None = None,
              tag: str | None = None, bind: str | None = None, port: int | None = None,
              admin_email: str, force: bool = False,
-             provider_mode: str | None = None) -> dict:
+             provider_mode: str | None = None,
+             configuration: dict | None = None) -> dict:
     templates = template_path(target, channel)
     compose_template = templates / "compose.yaml"
     env_template = templates / ".env.example"
@@ -314,6 +310,9 @@ def generate(*, target: str, channel: str, output: Path, owner: str | None = Non
     values = prepare_values(template, target=target, channel=channel,
                             owner=actual_owner, tag=pinned, bind=bind, port=port,
                             admin_email=admin_email, provider_mode=provider_mode)
+    updates = normalize_updates(configuration or {}, channel)
+    values.update(updates)
+    readiness = validate_integrations({**parse_env(template), **values}, channel)
     output = output.expanduser().resolve()
     ensure_directory(output)
     compose_path, env_path = output / "compose.yaml", output / ENV_NAME
@@ -343,6 +342,7 @@ def generate(*, target: str, channel: str, output: Path, owner: str | None = Non
             "owner": persisted["IMAGE_OWNER"], "web_port": int(persisted["WEB_PORT"]),
             "compose_path": str(compose_path), "env_path": str(env_path),
             "files_generated": [str(compose_path), str(env_path)],
+            "integrations": readiness,
             "env_preserved": old_env is not None, "backup_id": backup_id}
 
 
@@ -379,6 +379,7 @@ def validate_content(compose: str, env_text: str, *, expected_channel: str | Non
     if normalized_environment and normalized_environment != expected_channel:
         raise DeployerError("APP_ENV não corresponde ao canal do modelo.")
     provider_mode = selected_provider(env.get("PROVIDER_MODE"), expected_channel, env_text)
+    readiness = validate_integrations(env, expected_channel)
     if expected_channel == "production" and not (SEMVER.fullmatch(tag) or SHA_TAG.fullmatch(tag)):
         raise DeployerError("Produção exige SemVer estável ou sha-<12 hex> fixo.")
     if not (SEMVER.fullmatch(tag) or SHA_TAG.fullmatch(tag) or tag == "develop"):
@@ -414,7 +415,7 @@ def validate_content(compose: str, env_text: str, *, expected_channel: str | Non
             raise DeployerError(f"{name} não corresponde ao segredo configurado.")
     return {"project": env["COMPOSE_PROJECT_NAME"], "owner": env["IMAGE_OWNER"],
             "tag": tag, "bind": env["WEB_BIND_ADDRESS"], "port": port,
-            "provider_mode": provider_mode}
+            "provider_mode": provider_mode, "integrations": readiness}
 
 
 def validate_directory(directory: Path) -> dict:
@@ -586,6 +587,46 @@ def update_provider_mode(directory: Path, *, mode: str, confirmed: bool) -> dict
     }
 
 
+def integration_settings(directory: Path) -> dict:
+    """Return non-secret configuration for the GUI; never return passwords."""
+    directory = directory.expanduser().resolve()
+    if directory.is_symlink() or not (directory / ENV_NAME).is_file():
+        raise DeployerError("O .env da instalação não foi encontrado.")
+    values = parse_env((directory / ENV_NAME).read_text(encoding="utf-8"))
+    channel = "develop" if values.get("APP_ENV") == "development" else values.get("APP_ENV", "production")
+    from integrations import ALLOWED_KEYS, SECRET_KEYS
+    return {"values": {key: values.get(key, "") for key in ALLOWED_KEYS - SECRET_KEYS},
+            "secrets_configured": {key: bool(values.get(key)) for key in SECRET_KEYS},
+            "integrations": integration_status(values, channel)}
+
+
+def configure(directory: Path, updates: dict, *, confirmed: bool) -> dict:
+    """Patch only allowlisted Receita/SMTP fields, always preserving a private backup."""
+    if not confirmed:
+        raise DeployerError("Confirme a gravação das configurações (--yes).")
+    directory = directory.expanduser().resolve()
+    envfile, compose = directory / ENV_NAME, directory / "compose.yaml"
+    if (directory.is_symlink() or not envfile.is_file() or envfile.is_symlink()
+            or not compose.is_file() or compose.is_symlink()):
+        raise DeployerError("Instalação sem .env e compose.yaml regulares.")
+    original = envfile.read_text(encoding="utf-8")
+    current = parse_env(original)
+    channel = "develop" if current.get("APP_ENV") == "development" else current.get("APP_ENV", "production")
+    changes = normalize_updates(updates, channel, current)
+    combined = {**current, **changes}
+    integration_state = validate_integrations(combined, channel)
+    if not changes:
+        return {"changed": False, "integrations": integration_state}
+    data = append_or_replace_env(original, changes)
+    validate_content(compose.read_text(encoding="utf-8"), data, expected_channel=channel)
+    if data == original:
+        return {"changed": False, "integrations": integration_state}
+    backup = backup_files(directory, "integrations")
+    atomic_write(envfile, data.encode("utf-8"))
+    return {"changed": True, "backup_id": backup, "integrations": integration_state,
+            "notice": "Recrie os serviços no Docker/Dockge para aplicar as alterações"}
+
+
 def status(directory: Path) -> dict:
     directory = directory.expanduser().resolve()
     config = validate_directory(directory)
@@ -685,17 +726,21 @@ def make_parser() -> argparse.ArgumentParser:
         item.add_argument("--port", type=int)
         item.add_argument("--provider-mode", choices=PROVIDER_MODES)
         if name == "generate":
+            item.add_argument("--stdin-json", action="store_true")
             item.add_argument("--output", required=True, type=Path)
             item.add_argument("--admin-email", required=True, help="E-mail do administrador inicial")
             item.add_argument("--force", action="store_true", help="Atualizar o Compose e preservar integralmente o .env")
     for name in ("validate", "status", "deploy", "upgrade", "rollback", "recover",
-                 "export", "provider-update"):
+                 "export", "provider-update", "configure", "integration-settings"):
         item = commands.add_parser(name)
         item.add_argument("--directory", required=True, type=Path)
         if name in ("deploy", "upgrade", "rollback", "recover", "provider-update"):
             item.add_argument("--yes", action="store_true", help="Confirmar operação local")
         if name == "provider-update":
             item.add_argument("--mode", choices=PROVIDER_MODES, required=True)
+        if name == "configure":
+            item.add_argument("--yes", action="store_true")
+            item.add_argument("--stdin-json", action="store_true", required=True)
         if name in ("upgrade", "rollback"):
             item.add_argument("--tag", help="Tag SemVer estável ou sha-<12 hex> já publicada")
         if name == "recover":
@@ -719,7 +764,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "generate":
             output = generate(target=args.target, channel=args.channel, output=args.output,
                               owner=args.owner, tag=args.tag, bind=args.bind, port=args.port,
-                              admin_email=args.admin_email, force=args.force, provider_mode=args.provider_mode)
+                              admin_email=args.admin_email, force=args.force, provider_mode=args.provider_mode,
+                               configuration=read_config_stdin() if args.stdin_json else None)
         elif args.command == "preview":
             output = preview(target=args.target, channel=args.channel, owner=args.owner,
                              tag=args.tag, bind=args.bind, port=args.port, provider_mode=args.provider_mode)
@@ -729,6 +775,10 @@ def main(argv: list[str] | None = None) -> int:
             output = status(args.directory)
         elif args.command == "provider-update":
             output = update_provider_mode(args.directory, mode=args.mode, confirmed=args.yes)
+        elif args.command == "configure":
+            output = configure(args.directory, read_config_stdin(), confirmed=args.yes)
+        elif args.command == "integration-settings":
+            output = integration_settings(args.directory)
         elif args.command == "deploy":
             output = deploy(args.directory, confirmed=args.yes)
         elif args.command == "rollback":
@@ -743,7 +793,7 @@ def main(argv: list[str] | None = None) -> int:
             raise DeployerError("Comando desconhecido.")
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
-    except (DeployerError, OSError, UnicodeError) as exc:
+    except (DeployerError, ConfigurationError, OSError, UnicodeError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 1
 

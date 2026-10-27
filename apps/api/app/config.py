@@ -39,6 +39,18 @@ class Settings(BaseSettings):
     bootstrap_admin_password: str = ""
     bootstrap_admin_password_file: str = ""
     provider_mode: str = "disabled"
+    smtp_enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_password_file: str = ""
+    smtp_from: str = ""
+    smtp_reply_to: str = ""
+    smtp_starttls: bool = True
+    smtp_ssl: bool = False
+    app_public_url: str = ""
+    cnpj_lookup_enabled: bool = True
     cbs_restricted_enabled: bool = False
     cbs_production_enabled: bool = False
     cbs_payments_enabled: bool = False
@@ -61,7 +73,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def resolve_secret_files(self) -> "Settings":
-        for field in ("secret_key", "bootstrap_admin_password", "cbs_client_secret"):
+        for field in ("secret_key", "bootstrap_admin_password", "cbs_client_secret", "smtp_password"):
             filename = getattr(self, f"{field}_file")
             if filename:
                 if getattr(self, field):
@@ -151,6 +163,23 @@ class Settings(BaseSettings):
             raise RuntimeError("SECRET_KEY deve ter pelo menos 32 caracteres aleatórios")
         if self.provider_mode not in {"fixture", "receita", "disabled"}:
             raise RuntimeError("PROVIDER_MODE inválido")
+        if self.smtp_enabled:
+            from email.utils import parseaddr
+            import re
+            url = urlsplit(self.app_public_url)
+            if (not self.smtp_host or not 1 <= self.smtp_port <= 65535
+                    or any(c in self.smtp_host for c in "\\r\\n /:@")
+                    or (self.smtp_ssl and self.smtp_starttls)
+                    or (self.smtp_username and not self.smtp_password)
+                    or (self.smtp_password and not self.smtp_username)
+                    or (self.smtp_username and not (self.smtp_ssl or self.smtp_starttls))
+                    or parseaddr(self.smtp_from)[1] != self.smtp_from
+                    or not re.fullmatch(r"[^\\s@]+@[^\\s@]+\\.[^\\s@]+", self.smtp_from)
+                    or url.scheme != "https" or not url.hostname
+                    or url.username or url.password or url.query or url.fragment
+                    or url.path not in ("", "/")):
+                raise RuntimeError("SMTP_ENABLED requer host, TLS/SSL, remetente e APP_PUBLIC_URL HTTPS válidos")
+
         if self.provider_mode == "receita" and require_provider:
             if self.self_hosted and not self.cbs_client_secret_file:
                 raise RuntimeError("No modo self, informe CBS_CLIENT_SECRET_FILE protegido")

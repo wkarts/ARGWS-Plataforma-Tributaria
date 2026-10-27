@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.models import AuditEvent, Company, TaxCalculation, User
 from app.security import current_user
+from app.access import require_company, require_permission
 from app.tax_calculator import TaxCalculationIn, canonical, digest, execute_calculator, calculator_urls
 
 router = APIRouter(prefix="/api/v1", tags=["tax-calculator"])
@@ -39,6 +40,7 @@ async def _company(session: AsyncSession, user: User, company_id: str) -> Compan
         Company.id == company_id, Company.organization_id == user.organization_id))
     if company is None:
         raise HTTPException(404, "Empresa não encontrada")
+    await require_company(user, session, company_id, "calculator.read")
     return company
 
 
@@ -69,6 +71,7 @@ async def calculate(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     company = await _company(session, user, str(data.company_id))
+    await require_permission(user, session, "calculator.create")
     request_data = {"regime": data.regime, "payload": data.payload}
     request_hash = digest(canonical(request_data))
     if idempotency_key:
@@ -166,5 +169,6 @@ async def get_calculation(
         TaxCalculation.organization_id == user.organization_id))
     if value is None:
         raise HTTPException(404, "Cálculo não encontrado")
+    await require_company(user, session, value.company_id, "calculator.read")
     response.headers["Cache-Control"] = "no-store"
     return _out(value, True)

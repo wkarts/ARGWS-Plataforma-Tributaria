@@ -70,3 +70,11 @@ python tools/deployer/deployer.py provider-update --directory ./installation --m
 ```
 
 Após alterar o `.env`, recrie os serviços da stack para atualizar suas variáveis de ambiente. **Não execute `down --volumes`**. Os parâmetros oficiais vazios não são preenchidos com valores inventados nem com respostas simuladas. O estado de integração incompleta é apresentado no painel da API.
+
+## Integrações Receita / SMTP
+
+A GUI possui abas **Receita / CBS** e **E-mail / SMTP**, com configuração real de OAuth oficial, CNPJ raiz autorizado, callback HTTPS, ambientes e sincronização, além de servidor SMTP, TLS/SSL, autenticação, remetente e URL pública. Campos de senha ficam mascarados e **nunca entram em argumentos de linha de comando**. A ferramenta transmite JSON por stdin ao worker local, grava somente no .env da instalação e cria backup ao atualizar.
+
+Clique **Carregar configurações** para obter somente parâmetros não secretos; os campos de senha permanecem vazios, significando *preservar os segredos já salvos*. **Salvar integrações** atualiza o `.env` existente com backup e mantém bancos/volumes intactos. Ao gerar uma nova instalação, a interface envia os parâmetros preenchidos ao gerador, que verifica HTTPS e evita `fixture` na produção.
+
+O CLI interno aceita `generate --stdin-json` e `configure --directory ./installation --stdin-json --yes`, recebendo JSON com nomes permitidos pela entrada padrão. Não informe senhas como argumentos. `integration-settings --directory ./installation` retorna somente parâmetros públicos e flags de presença, nunca senha. Produção usa `disabled` por padrão; `receita` precisa de credenciais/ambientes para efetivamente consultar; `fixture` continua exclusivo do desenvolvimento.

@@ -58,6 +58,58 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), default="admin")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     token_version: Mapped[int] = mapped_column(Integer, default=0)
+    full_name: Mapped[str] = mapped_column(String(160), default="")
+    position: Mapped[str] = mapped_column(String(120), default="")
+    company_access_mode: Mapped[str] = mapped_column(String(16), default="all")
+    permission_keys: Mapped[list] = mapped_column(JSON, default=list)
+    totp_secret: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    totp_pending: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    totp_last_counter: Mapped[int] = mapped_column(BigInteger, default=0)
+    totp_recovery_hashes: Mapped[list] = mapped_column(JSON, default=list)
+    avatar: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    avatar_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AccessGroup(Base):
+    __tablename__ = "access_groups"
+    __table_args__ = (UniqueConstraint("organization_id", "name",
+                        name="uq_access_group_org_name"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(String(300), default="")
+    permission_keys: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class GroupMembership(Base):
+    __tablename__ = "group_memberships"
+    group_id: Mapped[str] = mapped_column(ForeignKey("access_groups.id"), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+
+
+class UserCompanyGrant(Base):
+    __tablename__ = "user_company_grants"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), primary_key=True)
+
+
+class GroupCompanyGrant(Base):
+    __tablename__ = "group_company_grants"
+    group_id: Mapped[str] = mapped_column(ForeignKey("access_groups.id"), primary_key=True)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), primary_key=True)
+
+
+class AccountAction(Base):
+    """Invitation/reset token: only a SHA-256 digest is stored; links expire."""
+    __tablename__ = "account_actions"
+    digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    purpose: Mapped[str] = mapped_column(String(16))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class AuthAttempt(Base):

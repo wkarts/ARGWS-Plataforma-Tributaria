@@ -62,6 +62,13 @@ def validate(values: dict[str, str], channel: str) -> None:
             raise ValueError("Integração Receita incompleta: " + ", ".join(missing))
         if not values["CBS_TOKEN_URL"].startswith("https://") or not values["CBS_WEBHOOK_BASE_URL"].startswith("https://"):
             raise ValueError("URLs de OAuth e webhook devem usar HTTPS")
+    if values.get("SMTP_ENABLED", "false").lower() == "true":
+        if not all(values.get(key) for key in ("SMTP_HOST", "SMTP_FROM", "APP_PUBLIC_URL")):
+            raise ValueError("SMTP ativado sem host, remetente e APP_PUBLIC_URL")
+        if not values["APP_PUBLIC_URL"].startswith("https://"):
+            raise ValueError("APP_PUBLIC_URL exige HTTPS")
+        if values.get("SMTP_STARTTLS", "true") == "true" and values.get("SMTP_SSL", "false") == "true":
+            raise ValueError("STARTTLS e SSL são mutuamente exclusivos")
     tag = values.get("APP_TAG", "")
     if channel == "production" and not (
         SEMVER.fullmatch(tag.removeprefix("v")) or re.fullmatch(r"sha-[0-9a-f]{12}", tag)

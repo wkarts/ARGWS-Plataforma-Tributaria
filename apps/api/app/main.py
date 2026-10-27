@@ -16,10 +16,13 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.access import accessible_companies, permissions, require_company, require_permission
 from app.config import get_settings
 from app.db import get_session
 from app.models import AuditEvent, Company, Query, Record, User, now
 from app.schemas import CompanyIn, LoginIn, PasswordChangeIn, QueryIn, ResolveUncertainIn
+from app.mfa import decrypt_seed, recover, valid_counter
+from app.identity_api import router as identity_router
 from app.security import admin_only, current_user, hash_password, issue_token, verify_password, webhook_token_hash
 from app.storage import BlobStore
 from app.documents import router as documents_router
@@ -43,6 +46,7 @@ app.include_router(finance_controls_router)
 app.include_router(branding_router)
 app.include_router(central_reforma_router)
 app.include_router(tax_calculator_router)
+app.include_router(identity_router)
 
 
 def capabilities() -> dict:
@@ -180,13 +184,34 @@ async def login(body: LoginIn, session: AsyncSession = Depends(get_session)) -> 
     user = await session.scalar(select(User).where(User.username == username, User.active.is_(True)))
     if user is None or not verify_password(user.password_hash, body.password):
         raise HTTPException(401, "Credenciais inválidas")
+    if user.totp_secret:
+        if not body.otp:
+            raise HTTPException(401, "Código 2FA obrigatório; informe autenticador ou recuperação")
+        counter = valid_counter(decrypt_seed(user.totp_secret), body.otp,
+                                previous_counter=user.totp_last_counter)
+        recovered, remaining = recover(body.otp, user.totp_recovery_hashes or [])
+        if counter is None and not recovered:
+            raise HTTPException(401, "Código 2FA incorreto ou já utilizado")
+        if counter is not None:
+            user.totp_last_counter = counter
+        else:
+            user.totp_recovery_hashes = remaining
+        await session.commit()
     return {"access_token": issue_token(user), "token_type": "bearer"}
 
 
 @app.get("/api/v1/auth/me")
 async def me(user: User = Depends(current_user)) -> dict:
-    return {"id": user.id, "username": user.username, "role": user.role,
-            "organization_id": user.organization_id}
+    from app.identity_api import output_user
+    return output_user(user)
+
+
+@app.get("/api/v1/auth/access")
+async def access_info(user: User = Depends(current_user),
+                      session: AsyncSession = Depends(get_session)) -> dict:
+    allowed = await accessible_companies(user, session)
+    return {"permission_keys": sorted(await permissions(user, session)),
+            "company_ids": sorted(allowed) if allowed is not None else None}
 
 
 @app.post("/api/v1/auth/change-password")
@@ -213,8 +238,12 @@ async def get_capabilities(user: User = Depends(current_user)) -> dict:
 
 @app.get("/api/v1/companies")
 async def companies(user: User = Depends(current_user), session: AsyncSession = Depends(get_session)) -> dict:
-    values = (await session.scalars(select(Company).where(Company.organization_id == user.organization_id)
-                                    .order_by(Company.name, Company.id).limit(500))).all()
+    await require_permission(user, session, "companies.read")
+    allowed = await accessible_companies(user, session)
+    stmt = select(Company).where(Company.organization_id == user.organization_id)
+    if allowed is not None:
+        stmt = stmt.where(Company.id.in_(allowed))
+    values = (await session.scalars(stmt.order_by(Company.name, Company.id).limit(500))).all()
     return {"items": [{"id": c.id, "name": c.name, "cnpj": c.cnpj,
                         "cnpj_base": c.cnpj_base} for c in values], "next_cursor": None}
 
@@ -250,8 +279,9 @@ def check_capability(payload: QueryIn, org_id: str, cnpj_base: str) -> None:
 
 @app.post("/api/v1/queries", status_code=202)
 async def create_query(body: QueryIn, idempotency_key: str = Header(min_length=8, max_length=128),
-                       user: User = Depends(admin_only),
+                       user: User = Depends(current_user),
                        session: AsyncSession = Depends(get_session)) -> dict:
+    await require_company(user, session, body.company_id, "queries.create")
     fingerprint = sha256(json.dumps(body.model_dump(), sort_keys=True).encode()).hexdigest()
     # The lookup precedes capability checks so a repeated request returns its
     # original result even after the feature flag is switched off.
@@ -330,8 +360,13 @@ async def list_queries(company_id: str | None = None, cursor: str | None = None,
                        user: User = Depends(current_user),
                        session: AsyncSession = Depends(get_session)) -> dict:
     offset = cursor_offset(cursor)
+    await require_permission(user, session, "queries.read")
+    allowed = await accessible_companies(user, session)
     stmt = select(Query).where(Query.organization_id == user.organization_id)
+    if allowed is not None:
+        stmt = stmt.where(Query.company_id.in_(allowed))
     if company_id:
+        await require_company(user, session, company_id, "queries.read")
         stmt = stmt.where(Query.company_id == company_id)
     values = (await session.scalars(stmt.order_by(Query.created_at.desc(), Query.id.desc())
                                     .offset(offset).limit(limit + 1))).all()
@@ -346,6 +381,7 @@ async def get_query(query_id: str, user: User = Depends(current_user),
                                                      Query.organization_id == user.organization_id))
     if value is None:
         raise HTTPException(404, "Consulta não encontrada")
+    await require_company(user, session, value.company_id, "queries.read")
     return query_out(value)
 
 
@@ -357,6 +393,7 @@ async def resolve_uncertain(query_id: str, body: ResolveUncertainIn,
         Query.organization_id == user.organization_id).with_for_update())
     if value is None:
         raise HTTPException(404, "Consulta não encontrada")
+    await require_company(user, session, value.company_id, "queries.create")
     if value.status != "uncertain":
         raise HTTPException(409, "Consulta não está aguardando conciliação manual")
     if body.action == "attach_ticket":
@@ -383,6 +420,7 @@ async def get_raw(query_id: str, user: User = Depends(current_user),
                                                      Query.organization_id == user.organization_id))
     if value is None or not value.raw_key or not value.raw_sha256:
         raise HTTPException(404, "Arquivo bruto não encontrado")
+    await require_company(user, session, value.company_id, "queries.read")
     try:
         data = await BlobStore(get_settings()).get(value.raw_key, value.raw_sha256)
     except Exception:
@@ -401,8 +439,13 @@ async def records(company_id: str | None = None, resource: str | None = None,
                   user: User = Depends(current_user),
                   session: AsyncSession = Depends(get_session)) -> dict:
     offset = cursor_offset(cursor)
+    await require_permission(user, session, "queries.read")
+    allowed = await accessible_companies(user, session)
     stmt = select(Record).where(Record.organization_id == user.organization_id)
+    if allowed is not None:
+        stmt = stmt.where(Record.company_id.in_(allowed))
     if company_id:
+        await require_company(user, session, company_id, "queries.read")
         stmt = stmt.where(Record.company_id == company_id)
     if resource:
         stmt = stmt.where(Record.resource == resource)
@@ -422,6 +465,7 @@ async def coverage(company_id: str, environment: str = "fixture",
         Company.organization_id == user.organization_id))
     if company is None:
         raise HTTPException(404, "Empresa não encontrada")
+    await require_company(user, session, company_id, "queries.read")
     if environment not in capabilities()["environments"]:
         raise HTTPException(422, "Ambiente desabilitado")
     resources = {}
