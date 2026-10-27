@@ -43,12 +43,12 @@ jobs:
 
           source_sha="$(gh api "repos/$repo/git/ref/heads/develop" --jq '.object.sha')"
           body="$RUNNER_TEMP/promocao-main.md"
-          cat > "$body" <<EOF
+          cat > "$body" <<'EOF'
           ## Promoção da develop para main
 
           Esta PR é aberta automaticamente quando a develop recebe novos commits. Ela acompanha a branch de origem, portanto novos merges entram na mesma PR.
 
-          **Commit da develop na abertura:** `$source_sha`.
+          **Origem:** `develop` (o HEAD atualizado aparece na PR).
 
           ### Condições obrigatórias antes do merge
           - [ ] CI e compilações aprovados no HEAD atual.
@@ -59,6 +59,7 @@ jobs:
 
           **Sem merge e sem deploy automáticos.**
           EOF
+          printf '\n**SHA observado:** `%s`.\n' "$source_sha" >> "$body"
           if gh pr create --repo "$repo" --base main --head develop --draft \
               --title "release: promover develop para main" --body-file "$body"; then
             echo "PR de promoção criada." >> "$GITHUB_STEP_SUMMARY"
