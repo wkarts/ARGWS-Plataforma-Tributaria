@@ -223,3 +223,26 @@ class FiscalDocument(Base):
     signature_present: Mapped[bool] = mapped_column(Boolean)
     authorization_status: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+\nclass TaxCalculation(Base):
+    """Immutable result from the installed fiscal calculation engine."""
+
+    __tablename__ = "tax_calculations"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "company_id", "idempotency_key",
+                         name="uq_tax_calculation_idempotency"),
+        Index("ix_tax_calc_company_created", "organization_id", "company_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid)
+    organization_id: Mapped[str] = mapped_column(ForeignKey("organizations.id"), index=True)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    regime: Mapped[str] = mapped_column(String(20))
+    idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    request_sha256: Mapped[str] = mapped_column(String(64))
+    response_sha256: Mapped[str] = mapped_column(String(64))
+    request_json: Mapped[dict] = mapped_column(JSON)
+    response_json: Mapped[dict] = mapped_column(JSON)
+    engine_version_json: Mapped[dict] = mapped_column(JSON)
+    calculated_totals_json: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
