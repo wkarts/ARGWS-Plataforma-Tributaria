@@ -6,8 +6,8 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: fiscal-publish-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref == 'refs/heads/develop' }}
+  group: fiscal-publish-${{ github.ref }}-${{ github.sha }}
+  cancel-in-progress: false
 jobs:
   verify:
     uses: ./.github/workflows/ci.yml
@@ -185,7 +185,7 @@ jobs:
           STAGING_TAG: ${{ needs.stage.outputs.tag }}
         run: |
           set -euo pipefail
-          mkdir -p release-collector-linux release-collector-windows
+          mkdir -p release-collector-linux release-collector-windows release-deployer
           for file in fiscal-xml-collector-gui-linux-x64.tar.gz SHA256SUMS-collector-linux.txt; do
             gh release download "$STAGING_TAG" --pattern "$file" --dir release-collector-linux --repo "$GITHUB_REPOSITORY"
           done
@@ -194,6 +194,22 @@ jobs:
           done
           mv release-collector-linux/SHA256SUMS-collector-linux.txt release-collector-linux/SHA256SUMS.txt
           mv release-collector-windows/SHA256SUMS-collector-windows.txt release-collector-windows/SHA256SUMS.txt
+          for file in Fiscal-Deployer-GUI-Windows-x64.zip README-Deployer.md SHA256SUMS-deployer.txt; do
+            gh release download "$STAGING_TAG" --pattern "$file" --dir release-deployer --repo "$GITHUB_REPOSITORY"
+          done
+          mv release-deployer/SHA256SUMS-deployer.txt release-deployer/SHA256SUMS.txt
+          (cd release-deployer && sha256sum -c SHA256SUMS.txt)
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          archive = Path("release-deployer/Fiscal-Deployer-GUI-Windows-x64.zip")
+          with ZipFile(archive) as package:
+              required = {"fiscal-deployer-gui-win-x64.exe",
+                          "fiscal-deployer-worker-win-x64.exe", "SHA256SUMS.txt", "README-Deployer.md"}
+              missing = required - set(package.namelist())
+              if missing:
+                  raise SystemExit(f"Deployer Windows sem componentes: {sorted(missing)}")
+          PY
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -246,18 +262,20 @@ jobs:
           python3 scripts/verify_collector_assets.py release-collector-linux release-collector-windows
           cp release-collector-linux/fiscal-xml-collector-gui-linux-x64.tar.gz release-files/
           cp release-collector-windows/fiscal-xml-collector-setup-windows-x64.exe release-files/
+          cp release-deployer/Fiscal-Deployer-GUI-Windows-x64.zip release-files/
           cp tools/collector/systemd/README-self.md release-files/README-XML-Collector-Linux.md
           cp tools/collector/windows/README-installer.md release-files/README-XML-Collector-Windows.md
           cp docs/CONTRATOS-OFICIAIS-2026.md release-files/CONTRATOS-OFICIAIS-2026.md
-          if find deploy -type f -name '.env' -print -quit | grep -q .; then
-            echo 'Private .env in source; refusing release' >&2; exit 1
+          if find deploy apps -type f -name '.env*' ! -name '.env.example' -print -quit | grep -q .; then
+            echo 'Private dotenv in source; refusing release' >&2; exit 1
           fi
           label="$VERSION"
           [[ "$CHANNEL" == develop ]] && label=preview
-          zip -q -r "release-files/Fiscal-Self-Deploy-$label.zip" deploy/self apps/api apps/web infra/docker/nginx.conf VERSION \
+          zip -q -r "release-files/Fiscal-Self-Deploy-$label.zip" deploy/self apps/api apps/web infra/docker/nginx.conf scripts/sync_deploy_env.py VERSION \
             -x '*/.env' '*/secrets/*' '*/backups/*' '*/volumes/*' \
                '*/node_modules/*' '*/dist/*' '*/.venv/*' '*/__pycache__/*' \
                '*/*.egg-info/*' '*.pyc' '*.sqlite3' '*.db' '*.pem' '*.p12' '*.pfx' '*.log'
+          python3 scripts/build_deploy_matrix.py --output "release-files/Fiscal-Deploy-Matrix-$label.zip"
           python3 - <<'PY'
           import zipfile
           from pathlib import Path
@@ -266,11 +284,33 @@ jobs:
               names = set(archive.namelist())
               required = {'deploy/self/compose.yaml', 'deploy/self/api.Dockerfile',
                           'deploy/self/web.Dockerfile', 'apps/api/pyproject.toml',
-                          'apps/web/package.json', 'infra/docker/nginx.conf', 'VERSION'}
+                          'apps/web/package.json', 'infra/docker/nginx.conf',
+                          'scripts/sync_deploy_env.py', 'VERSION'}
               missing = required - names
               forbidden = [name for name in names if name.startswith('deploy/') and not name.startswith('deploy/self/')]
               if missing or forbidden:
                   raise SystemExit(f'Invalid self deployment archive: missing={missing}, forbidden={forbidden}')
+          matrix = next(Path('release-files').glob('Fiscal-Deploy-Matrix-*.zip'))
+          with zipfile.ZipFile(matrix) as bundle:
+              entries = set(bundle.namelist())
+              required = {'deploy/compose.yaml', 'deploy/env.develop.example',
+                          'deploy/env.production.example', 'deploy/README.md',
+                          'scripts/deploy.sh', 'scripts/preflight.py',
+                          'scripts/sync_deploy_env.py', 'tools/deployer/deployer.py',
+                          'VERSION'}
+              for target in ('', 'docker/', 'dockge/', 'portainer/', 'cloudpanel/'):
+                  for channel in ('develop', 'production'):
+                      root = f'deploy/{target}{channel}/'
+                      required.add(root + 'compose.yaml')
+                      required.add(root + '.env.example')
+              missing = required - entries
+              unsafe = [name for name in entries if name.endswith('/.env')
+                        or '/secrets/' in name or '/backups/' in name or '/volumes/' in name]
+              if missing or unsafe:
+                  raise SystemExit(f'Invalid deploy matrix: missing={sorted(missing)}, unsafe={unsafe}')
+              for name in required:
+                  if bundle.read(name) != Path(name).read_bytes():
+                      raise SystemExit(f'Deploy matrix diverges from Git HEAD: {name}')
           PY
           npm ci --prefix apps/web --no-audit --no-fund
           npm run build --prefix apps/web
@@ -282,7 +322,8 @@ jobs:
             echo 'Use IMAGES.txt and BASE-IMAGES.txt for immutable registry digests.'
           } > release-files/BUILD-INFO.txt
           (cd release-files && sha256sum -- * > SHA256SUMS.txt)
-      - name: Confirm the branch still points to this verified commit
+      - name: Confirm stable release still points to the verified commit
+        if: needs.source.outputs.channel == 'main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CHANNEL: ${{ needs.source.outputs.channel }}

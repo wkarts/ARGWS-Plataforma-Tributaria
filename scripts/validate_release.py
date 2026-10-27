@@ -57,8 +57,20 @@ for name in ('fiscal-xml-collector-gui-linux-x64.tar.gz', 'fiscal-xml-collector-
     assert f'cp release-collector-' in workflow and f'/{name} release-files/' in workflow
     assert name in collector
 assert 'Fiscal-Self-Deploy-$label.zip' in workflow
-assert 'release-deployer/' not in workflow and 'README-Deployer.md release-files/' not in workflow
-assert 'cp release-deployer/*.exe' not in workflow
+assert 'release-deployer/' in workflow
+assert 'cp release-deployer/Fiscal-Deployer-GUI-Windows-x64.zip release-files/' in workflow
+assert 'SHA256SUMS-deployer.txt' in workflow
+assert 'Fiscal-Deploy-Matrix-$label.zip' in workflow
+assert 'scripts/sync_deploy_env.py' in workflow
+assert "if: needs.source.outputs.channel == 'main'" in workflow
+assert 'group: fiscal-publish-${{ github.ref }}-${{ github.sha }}' in workflow
+assert 'cancel-in-progress: false' in workflow
+assert 'v${VERSION}-develop.${GITHUB_SHA::12}' in publisher
+assert 'gh release edit "$preview_tag" --prerelease --draft=false' in publisher
+assert 'gh release download "$preview_tag" --dir "$verified"' in publisher
+assert 'gh release upload pre-release "$files"/* --clobber' in publisher
+assert publisher.index('gh release edit "$preview_tag" --prerelease --draft=false') < publisher.index('gh release upload pre-release "$files"/* --clobber')
+assert 'python3 scripts/build_deploy_matrix.py --output' in workflow
 assert 'cp release-collector-linux/fiscal-xml-collector-linux-amd64' not in workflow
 assert 'cp release-collector-windows/fiscal-xml-collector-windows-amd64.exe' not in workflow
 for name in ('fiscal-xml-gui-linux-x64', 'fiscal-xml-worker-linux-x64',

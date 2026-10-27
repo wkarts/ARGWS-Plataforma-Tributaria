@@ -93,7 +93,7 @@ O adaptador preserva o SOAP original e cada `docZip`, faz extração limitada e 
 
 ## Versão e esteiras
 
-`VERSION` é a fonte canônica SemVer. `python3 scripts/version.py check` verifica a versão do backend, frontend e lockfile; `python3 scripts/version.py next patch|minor|major` sugere o próximo valor e `python3 scripts/version.py set X.Y.Z` sincroniza os arquivos. O fluxo proposto é `feature/*` → PR em `develop` → pré-release móvel `pre-release`; uma promoção revisada a `main` produz `vX.Y.Z` estável após CI, imagens GHCR, GUI Windows e verificações de digest/checksum. A tag estável existente não é sobrescrita. As sete imagens base são declaradas em `.github/base-images.json`; a política de retenção preserva releases estáveis e bases, e a exclusão de GHCR não está habilitada por padrão. Não execute limpeza global de Docker/volumes.
+`VERSION` é a fonte canônica SemVer. `python3 scripts/version.py check` verifica a versão do backend, frontend e lockfile; `python3 scripts/version.py next patch|minor|major` sugere o próximo valor e `python3 scripts/version.py set X.Y.Z` sincroniza os arquivos. O fluxo proposto é `feature/*` → PR em `develop` → pré-release automática e imutável por commit (`vX.Y.Z-develop.<sha12>`), com imagens móveis `:develop`; uma promoção revisada a `main` produz `vX.Y.Z` estável após CI, imagens GHCR, GUI Windows e verificações de digest/checksum. A tag estável existente não é sobrescrita. As sete imagens base são declaradas em `.github/base-images.json`; a política de retenção preserva releases estáveis e bases, e a exclusão de GHCR não está habilitada por padrão. Não execute limpeza global de Docker/volumes.
 
 Verificações locais:
 

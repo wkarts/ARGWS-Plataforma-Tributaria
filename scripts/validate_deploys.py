@@ -40,6 +40,22 @@ def static_checks() -> list[str]:
                     errors.append(f"Segredo com default ou ausente: {directory}/{key}")
             if not env.count("COMPOSE_PROJECT_NAME=") == 1:
                 errors.append(f"Projeto Compose inválido: {directory}")
+    calculator_keys = (
+        "TAX_CALCULATOR_REGULAR_URL", "TAX_CALCULATOR_REGULAR_VERSION_URL",
+        "TAX_CALCULATOR_SIMPLES_URL", "TAX_CALCULATOR_SIMPLES_VERSION_URL",
+    )
+    for key in calculator_keys:
+        if f"  {key}: ${{{key}:-}}" not in compose:
+            errors.append(f"Compose sem repasse de {key}")
+        for channel in CHANNELS:
+            env_model = (DEPLOY / f"env.{channel}.example").read_text(encoding="utf-8")
+            if not re.search(rf"^{key}=$", env_model, re.MULTILINE):
+                errors.append(f"Modelo {channel} não declara {key}")
+    if 'extra_hosts: ["host.docker.internal:host-gateway"]' not in compose:
+        errors.append("API sem mapeamento de host para motor tributário local")
+    self_compose = (DEPLOY / "self" / "compose.yaml").read_text(encoding="utf-8")
+    if 'extra_hosts: ["host.docker.internal:host-gateway"]' not in self_compose:
+        errors.append("Instalação self sem mapeamento de host para motor local")
     manifest = (ROOT / ".github" / "base-images.json")
     if not manifest.is_file():
         errors.append("Manifesto de imagens-base ausente")

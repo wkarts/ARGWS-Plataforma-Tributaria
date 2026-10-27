@@ -17,13 +17,30 @@ Cada diretório é autossuficiente: `compose.yaml` e `.env.example`. As configur
 
 ## Imagens e canais
 
-`VERSION` na raiz é a versão estável canônica; `python3 scripts/version.py check` verifica `pyproject.toml`, `package.json` e `package-lock.json`. Um bump explícito usa `python3 scripts/version.py set X.Y.Z` no branch de trabalho. Develop atualiza a tag móvel `:develop` das imagens e **uma única** GitHub pré-release `pre-release`. Main publica `vX.Y.Z`, sem sufixos; as tags `:X.Y.Z`, `:vX.Y.Z`, `:sha-<12>`, `:main`, `:stable` e `:latest` apontam ao build aprovado. A release contém `IMAGES.txt` e `BASE-IMAGES.txt` com digests completos, pacote de deploy, executáveis Windows GUI/CLI e `SHA256SUMS.txt`. Uma release estável existente não tem seus assets substituídos pelo workflow.
+`VERSION` na raiz é a versão estável canônica; `python3 scripts/version.py check` verifica `pyproject.toml`, `package.json` e `package-lock.json`. Um bump explícito usa `python3 scripts/version.py set X.Y.Z` no branch de trabalho. Cada merge na `develop` dispara o CI e, se os artefatos passarem na validação, cria uma **pré-release imutável por commit** (`vX.Y.Z-develop.<sha12>`), com pacote completo de todos os dez modelos de implantação, coletor Windows/Linux e deployer Windows. Somente o commit atual da `develop` promove a tag móvel de imagens `:develop`. A release móvel histórica `pre-release` continua sendo atualizada por compatibilidade **somente depois** de publicar e conferir o snapshot imutável. Versões de merges anteriores continuam disponíveis nas tags individuais. Main publica `vX.Y.Z`, sem sufixos; as tags `:X.Y.Z`, `:vX.Y.Z`, `:sha-<12>`, `:main`, `:stable` e `:latest` apontam ao build aprovado. A release contém `IMAGES.txt` e `BASE-IMAGES.txt` com digests completos, o pacote self, a matriz Docker/Dockge/Portainer/CloudPanel (ambos os canais), o deployer Windows GUI/CLI, coletores Windows/Linux e `SHA256SUMS.txt`. Uma release estável existente não tem seus assets substituídos pelo workflow.
 
 Estes modelos são a implantação legada baseada em imagens GHCR. O namespace em `IMAGE_OWNER` é escolhido explicitamente pelo operador; imagens obtidas do registro de origem conservam sua proveniência e o nome do pacote no próprio registro. Para a instalação self com imagens construídas na infraestrutura do cliente e SQLite, consulte `deploy/self/`; ela não precisa de um namespace GHCR.
 
 O fluxo de main constrói primeiro só `:sha-<12>`, conclui CI e os executáveis Windows, cria um draft e confere cada asset e seu checksum. Depois promove `:X.Y.Z` e `:vX.Y.Z` por digest e publica o draft. Um retry completa somente arquivos ausentes cujo hash coincide com o manifest remoto; um asset divergente interrompe a operação. As tags móveis `main/stable/latest` só avançam se o commit publicado ainda for o HEAD de main. Se uma execução falhar entre promoção e publicação, o draft completo permanece para retomada, sem apagar tags canônicas.
 
 As sete imagens-base (`python`, `node`, `nginx`, `postgres`, `redis`, `rabbitmq`, `objectstore`) constam em `.github/base-images.json`. A automação não reetiqueta uma base publicada; para atualizar o runtime, incremente `rN`, ajuste as referências dependentes e valide a compatibilidade dos dados. Imagens de API e web são publicadas para `linux/amd64` e `linux/arm64`, com SBOM e proveniência. Os pacotes Python ainda usam faixas de dependências no `pyproject.toml`, logo rebuilds de código-fonte não são bit a bit reproduzíveis; a release registra `API-DEPENDENCIES.txt` extraído da imagem publicada e os digests exatos.
+
+## Calculadora tributária em todos os destinos
+
+Os perfis `self`, Docker, Dockge, Portainer e CloudPanel utilizam o mesmo módulo de cálculo por operação. A API **não inclui uma imagem tributária fictícia**: instale a Calculadora normativa em rede interna controlada, verifique sua versão e seus contratos HTTP antes de habilitar o regime. Configure no `.env` da instalação:
+
+```dotenv
+TAX_CALCULATOR_REGULAR_URL=
+TAX_CALCULATOR_REGULAR_VERSION_URL=
+TAX_CALCULATOR_SIMPLES_URL=
+TAX_CALCULATOR_SIMPLES_VERSION_URL=
+```
+
+Cada regime exige a URL de cálculo e a URL de versão, com o mesmo host e porta. Se o motor estiver em contêiner na rede de aplicação, use os nomes de serviço reconhecidos `calculator-regular`, `calculator-simples` ou `tax-calculator`. Se estiver instalado na máquina anfitriã, `host.docker.internal` é resolvido no contêiner `api` pelo mapeamento `host-gateway`; a porta deve ser acessível somente da rede autorizada. O nome `localhost` dentro da API não corresponde ao host. As URLs são acessíveis apenas ao backend e não são expostas no navegador.
+
+Deixar as quatro variáveis vazias desabilita o cálculo, sem interromper os demais módulos. O serviço fiscal local não é baixado ou iniciado automaticamente, e a configuração nunca cria alíquotas ou resultados hipotéticos. Consulte `docs/CALCULO-TRIBUTARIO-LOCAL.md` para a versão do contrato utilizada.
+
+Os modelos oficiais são `deploy/compose.yaml`, `deploy/env.develop.example` e `deploy/env.production.example`. `scripts/generate_deploys.py` propaga alterações aos dez diretórios derivados. O `.env` privado de uma instalação não é alterado pelo gerador. Para acrescentar apenas os novos parâmetros opcionais sem substituir segredos, use `scripts/sync_deploy_env.py --directory DIRETORIO --target docker|dockge|portainer|cloudpanel|canonical --channel develop|production --apply`, após conferir o diagnóstico sem `--apply`. No perfil self, use `--target self --channel self`. O merge atualiza artefatos de distribuição; **não realiza deploy remoto em servidores de clientes**.
 
 ## Desenvolvimento local sem GHCR
 
