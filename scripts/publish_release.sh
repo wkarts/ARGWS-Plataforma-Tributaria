@@ -94,7 +94,14 @@ if [[ "$CHANNEL" == develop ]]; then
   else
     status=$?
     [[ "$status" -eq 1 ]] || exit "$status"
+    # Releases criadas como draft não criam a referência Git automaticamente.
+    # Vincule explicitamente a tag imutável ao commit VALIDADO antes do draft.
+    gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+      -f ref="refs/tags/$preview_tag" -f sha="$GITHUB_SHA" >/dev/null
   fi
+  [[ "$(ref_sha "$preview_tag")" == "$GITHUB_SHA" ]] || {
+    echo "Falha ao validar a tag imutável antes da criação da pré-release." >&2; exit 1;
+  }
 
   remote="$(mktemp -d)"
   verified="$(mktemp -d)"
@@ -109,7 +116,7 @@ if [[ "$CHANNEL" == develop ]]; then
   else
     status=$?
     [[ "$status" -eq 1 ]] || exit "$status"
-    gh release create "$preview_tag" --target "$GITHUB_SHA" --draft --prerelease --latest=false \
+    gh release create "$preview_tag" --verify-tag --target "$GITHUB_SHA" --draft --prerelease --latest=false \
       --title "Prévia $VERSION (${GITHUB_SHA::12})" \
       --notes "Build do commit $GITHUB_SHA. Artefatos conferidos por SHA256SUMS.txt e digests de IMAGES.txt." \
       --repo "$GITHUB_REPOSITORY"
