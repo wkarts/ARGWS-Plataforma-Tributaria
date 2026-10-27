@@ -172,7 +172,8 @@ jobs:
                                  (os.environ["BOOTSTRAP_ADMIN_EMAIL"],))
                   assert cursor.fetchone()[0] == 1, "Administrador duplicado/ausente"
           print("OK: bootstrap idempotente PostgreSQL + RustFS e bucket S3 válido")
-          PY  frontend:
+          PY
+  frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
